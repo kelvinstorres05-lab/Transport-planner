@@ -162,6 +162,121 @@ function drawLayers(count){let html='';for(let layer=0;layer<2;layer++){html+=`<
 function drawTruck(count){let c=loadCanvas,ctx=c.getContext('2d'),W=c.width,H=c.height;ctx.clearRect(0,0,W,H);ctx.save();ctx.translate(W/2,H/2+40);ctx.rotate(angle*Math.PI/180);let sx=24,sy=36,g=5,cols=13,rows=2;for(let layer=0;layer<2;layer++){let ox=-cols*(sx+g)/2,oy=-rows*(sy+g)/2-layer*95;for(let r=0;r<rows;r++)for(let col=0;col<cols;col++){let idx=layer*26+r*cols+col,x=ox+col*(sx+g),y=oy+r*(sy+g);ctx.fillStyle=idx<count?'#c58e55':'#f7f8fa';ctx.strokeStyle=idx<count?'#805629':'#94a3b8';ctx.setLineDash(idx<count?[]:[4,3]);ctx.fillRect(x,y,sx,sy);ctx.strokeRect(x,y,sx,sy)}ctx.setLineDash([]);ctx.strokeStyle='#64748b';ctx.lineWidth=3;ctx.strokeRect(ox-12,oy-12,cols*(sx+g)+18,rows*(sy+g)+18)}ctx.restore()}
 function rotateLoad(d){angle+=d;render3DLoad()}function resetLoadView(){angle=-36;render3DLoad()}loadCanvas?.addEventListener('mousedown',e=>{drag=true;lastX=e.clientX});window.addEventListener('mouseup',()=>drag=false);window.addEventListener('mousemove',e=>{if(!drag)return;angle+=(e.clientX-lastX)*.25;lastX=e.clientX;render3DLoad()});
 function openPackModal(i=-1){editingPack=i;let p=i>=0?db.packaging[i]:{supplier:'',supplierCode:'',material:'',description:'',itemsPerBox:0,boxesPerPallet:0,itemsPerPallet:0,unit:'PC'};packModalTitle.textContent=i>=0?'Editar material':'Novo material';let fs=[['supplier','Fornecedor'],['supplierCode','Código fornecedor'],['material','Material'],['description','Descrição'],['itemsPerBox','Itens por caixa'],['boxesPerPallet','Caixas por pallet'],['itemsPerPallet','Itens por pallet (lote)'],['unit','Unidade']];packForm.innerHTML=fs.map(([k,l])=>`<div class="field"><label>${l}</label><input id="pf_${k}" ${k.startsWith('items')||k.startsWith('boxes')?'type="number"':''} value="${esc(p[k])}"></div>`).join('');packModal.classList.add('show')}function closePackModal(){packModal.classList.remove('show')}function savePackRecord(){let obj={};['supplier','supplierCode','material','description','itemsPerBox','boxesPerPallet','itemsPerPallet','unit'].forEach(k=>{let v=document.getElementById('pf_'+k).value;obj[k]=['itemsPerBox','boxesPerPallet','itemsPerPallet'].includes(k)?+v:v});if(!obj.itemsPerPallet)obj.itemsPerPallet=obj.itemsPerBox*obj.boxesPerPallet;if(editingPack>=0)db.packaging[editingPack]=obj;else db.packaging.unshift(obj);persist();closePackModal();render()}
+
+function safeSheetName(name){
+  return String(name||'Data').replace(/[\\\/\?\*\[\]\:]/g,'-').slice(0,31);
+}
+function exportProcessedByDate(){
+  if(typeof XLSX==='undefined'){alert('Biblioteca Excel indisponível.');return}
+  let windows=receivingWindowsData();
+  if(!windows.length){
+    alert('Não há dados por data para exportar. Reimporte o planejamento, selecione os períodos de Planned/Firmed e processe novamente.');
+    return;
+  }
+
+  let wb=XLSX.utils.book_new(),mode=document.getElementById('windowReceiptMode')?.value||'current';
+
+  // Aba 1: resumo por data/janela
+  let summary=windows.map(w=>{
+    let d=new Date(w.date+'T00:00:00');
+    let uniquePN=new Set(w.items.map(x=>String(x.material).toUpperCase())).size;
+    return {
+      'Janela':w.window,
+      'Data':d.toLocaleDateString('pt-BR'),
+      'Semana':'W'+isoWeek(d),
+      'Part Numbers':uniquePN,
+      'Total Peças':w.pieces,
+      'Total Pallets':w.pallets,
+      'Carretas Necessárias':w.vehicles,
+      'Capacidade Total Pallets':w.vehicles*db.config.capacity,
+      'Ocupação':w.occ,
+      'Status Ocupação':w.status,
+      'Rota':db.config.routeName||'',
+      'Modo de Receipts':mode
+    };
+  });
+  let wsSummary=XLSX.utils.json_to_sheet(summary);
+  wsSummary['!cols']=[
+    {wch:10},{wch:13},{wch:9},{wch:14},{wch:14},{wch:14},
+    {wch:20},{wch:24},{wch:13},{wch:20},{wch:40},{wch:22}
+  ];
+  XLSX.utils.book_append_sheet(wb,wsSummary,'Resumo por Data');
+
+  // Aba 2: detalhamento completo de todas as datas
+  let detail=[];
+  windows.forEach(w=>{
+    let d=new Date(w.date+'T00:00:00');
+    w.items.forEach(r=>{
+      detail.push({
+        'Janela':w.window,
+        'Data':d.toLocaleDateString('pt-BR'),
+        'Semana':'W'+isoWeek(d),
+        'Part Number':r.material,
+        'Descrição':r.pk?.description||r.description||'',
+        'Fornecedor':r.pk?.supplier||'',
+        'Planned Receipts':r.planned||0,
+        'Firmed Receipts':r.firmed||0,
+        'Quantidade Entrega':r.qty,
+        'Itens por Caixa':r.pk?.itemsPerBox||0,
+        'Caixas por Pallet':r.pk?.boxesPerPallet||0,
+        'Itens por Pallet':r.ipp||0,
+        'Pallets':r.status==='OK'?r.pallets:'',
+        'Status':r.status,
+        'Rota':db.config.routeName||''
+      });
+    });
+  });
+  let wsDetail=XLSX.utils.json_to_sheet(detail);
+  wsDetail['!cols']=[
+    {wch:10},{wch:13},{wch:9},{wch:18},{wch:42},{wch:32},{wch:18},
+    {wch:18},{wch:20},{wch:16},{wch:18},{wch:18},{wch:12},{wch:18},{wch:40}
+  ];
+  XLSX.utils.book_append_sheet(wb,wsDetail,'Detalhe por Data');
+
+  // Abas individuais por data/janela
+  windows.forEach(w=>{
+    let d=new Date(w.date+'T00:00:00'),dateTxt=d.toLocaleDateString('pt-BR');
+    let rows=w.items.map(r=>({
+      'Part Number':r.material,
+      'Descrição':r.pk?.description||r.description||'',
+      'Fornecedor':r.pk?.supplier||'',
+      'Planned Receipts':r.planned||0,
+      'Firmed Receipts':r.firmed||0,
+      'Quantidade Entrega':r.qty,
+      'Itens por Pallet':r.ipp||0,
+      'Pallets':r.status==='OK'?r.pallets:'',
+      'Status':r.status
+    }));
+    rows.push({});
+    rows.push({
+      'Part Number':'TOTAL',
+      'Descrição':`${new Set(w.items.map(x=>String(x.material).toUpperCase())).size} Part Numbers`,
+      'Quantidade Entrega':w.pieces,
+      'Pallets':w.pallets,
+      'Status':`${w.vehicles} carreta(s) • ${(w.occ*100).toFixed(1)}% ocupação`
+    });
+    let ws=XLSX.utils.json_to_sheet(rows);
+    ws['!cols']=[
+      {wch:18},{wch:42},{wch:32},{wch:18},{wch:18},
+      {wch:20},{wch:18},{wch:12},{wch:30}
+    ];
+    XLSX.utils.book_append_sheet(wb,ws,safeSheetName(`J${w.window}-${dateTxt.replaceAll('/','-')}`));
+  });
+
+  // Metadados básicos do arquivo
+  wb.Props={
+    Title:'WK - Planejamento Processado por Data',
+    Subject:'Planejamento diário de recebimento e transporte',
+    Author:'WK Transport Planner',
+    CreatedDate:new Date()
+  };
+
+  let first=windows[0],last=windows[windows.length-1];
+  let firstDate=new Date(first.date+'T00:00:00'),lastDate=new Date(last.date+'T00:00:00');
+  let filename=`WK_Planejamento_por_Data_W${isoWeek(firstDate)}${isoWeek(lastDate)!==isoWeek(firstDate)?'-W'+isoWeek(lastDate):''}.xlsx`;
+  XLSX.writeFile(wb,filename);
+}
+
 function importPackaging(e){readWorkbook(e.target.files[0],rows=>{let cols=Object.keys(rows[0]||{}),m=autoMap(cols);db.packaging=rows.map(r=>({supplier:r[m.supplier]||'',supplierCode:'',material:r[m.material]||'',description:r[m.description]||'',itemsPerBox:num(r[m.itemsPerBox]),boxesPerPallet:num(r[m.boxesPerPallet]),itemsPerPallet:num(r[m.itemsPerPallet])||num(r[m.itemsPerBox])*num(r[m.boxesPerPallet]),unit:'PC'})).filter(x=>x.material);persist();render()})}
 function readPlanningFile(e){let f=e.target.files[0];if(!f)return;let reader=new FileReader();reader.onload=x=>{currentBook=XLSX.read(x.target.result,{type:'array',cellDates:true});sheetSelect.innerHTML=currentBook.SheetNames.map(n=>`<option>${n}</option>`).join('');changePlanSheet();mapModal.classList.add('show')};reader.readAsArrayBuffer(f)}
 function parseDateHeader(v){
