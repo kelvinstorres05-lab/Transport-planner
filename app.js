@@ -1,9 +1,9 @@
 const KEY='wk-transport-planner-v3';
-const DEFAULT={config:{capacity:52,minOcc:85,maxOcc:100,cost:1797.34,distance:68.8,ttw:0.78471,wtt:0.18538,windows:2,periodWeeks:18,beforePerWeek:3,weekLabel:'S34–S51'},packaging:window.INIT_PACKAGING||[],plan:window.DEMO_PLAN||[],history:[]};
+const DEFAULT={config:{capacity:52,minOcc:85,maxOcc:100,cost:1797.34,distance:68.8,ttw:0.78471,wtt:0.18538,windows:2,periodWeeks:18,beforePerWeek:3,weekLabel:'S34–S51'},packaging:window.INIT_PACKAGING||[],plan:window.DEMO_PLAN||[],dailyReceipts:[],history:[]};
 let db=loadDB();let currentBook=null,currentRows=[],mapping={};let editingPack=-1;let angle=-36,drag=false,lastX=0,lastY=0;
-function clone(x){return JSON.parse(JSON.stringify(x))}function loadDB(){try{let x=JSON.parse(localStorage.getItem(KEY));return x||clone(DEFAULT)}catch(e){return clone(DEFAULT)}}function persist(){localStorage.setItem(KEY,JSON.stringify(db))}
+function clone(x){return JSON.parse(JSON.stringify(x))}function loadDB(){try{let x=JSON.parse(localStorage.getItem(KEY));if(x){if(!x.dailyReceipts)x.dailyReceipts=[];return x}return clone(DEFAULT)}catch(e){return clone(DEFAULT)}}function persist(){localStorage.setItem(KEY,JSON.stringify(db))}
 function fmt(v,d=0){return Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d})}function money(v){return Number(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}function pct(v){return fmt(v*100,1)+'%'}function esc(s){return String(s??'').replace(/[&<>\"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[m]))}
-const titles={dashboard:['Dashboard executivo','Visão consolidada da necessidade de transporte WK'],loading3d:['Carregamento 3D','Visualização prevista da ocupação por janela e veículo'],planning:['Planejamento semanal','Importe Planned Receipts e Firmed Receipts'],packaging:['Base de Embalagens','Cadastro editável de materiais e lotes'],impacts:['Impactos da otimização','Saving, viagens e CO₂ evitado'],config:['Configurações','Parâmetros operacionais do cálculo']};
+const titles={dashboard:['Dashboard executivo','Visão consolidada da necessidade de transporte WK'],loading3d:['Carregamento 3D','Visualização prevista da ocupação por janela e veículo'],planning:['Planejamento semanal','Importe Planned Receipts e Firmed Receipts'],receivingWindows:['Janelas de Recebimento','Detalhamento diário por data e Part Number'],packaging:['Base de Embalagens','Cadastro editável de materiais e lotes'],impacts:['Impactos da otimização','Saving, viagens e CO₂ evitado'],config:['Configurações','Parâmetros operacionais do cálculo']};
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.getElementById(b.dataset.page).classList.add('active');pageTitle.textContent=titles[b.dataset.page][0];pageSub.textContent=titles[b.dataset.page][1];render()});
 function packIndex(){const m={};db.packaging.forEach(p=>{if(p.material)m[String(p.material).trim().toUpperCase()]=p});return m}
 function usedQty(r){let p=+r.planned||0,f=+r.firmed||0,m=document.getElementById('qtyMode')?.value||'sum';return m==='planned'?p:m==='firmed'?f:m==='max'?Math.max(p,f):p+f}
@@ -14,82 +14,10 @@ function kpi(label,value,note){return `<div class="card"><div class="kpi-label">
 function occStatus(o){return o>db.config.maxOcc/100?['ACIMA DE 100%','bad']:o<db.config.minOcc/100?['ABAIXO DE 85%','warn']:['OK','ok']}
 function renderDashboard(){let t=totals();kpiGrid.innerHTML=[kpi('Peças',fmt(t.pieces),'Quantidade calculada'),kpi('Pallets',fmt(t.pallets),'Pela base de embalagens'),kpi('Carretas/semana',fmt(t.perWeek),'Plano otimizado'),kpi('Ocupação média',pct(t.avg),'Alvo 85%–100%'),kpi('Saving',money(t.saving),db.config.weekLabel),kpi('CO₂ TTW evitado',fmt(t.ttw/1000,2)+' t','Estimativa')].join('');windowCards.innerHTML=t.windowPallets.map((p,i)=>`<div class="pill">Janela ${i+1}: ${p} pallets</div>`).join('')||'<div class="smalltxt">Sem planejamento.</div>';planSummary.innerHTML=`O plano possui <b>${fmt(t.pallets)} pallets</b> e requer <b>${t.perWeek} carreta(s) por semana</b> em <b>${db.config.windows} janela(s)</b>. Economia potencial no período: <b>${money(t.saving)}</b>.`;criticalSummary.innerHTML=t.crit.length?`<span class="badge bad">${t.crit.length} material(is) crítico(s)</span><div class="smalltxt" style="margin-top:8px">Cadastre ou corrija embalagem/lote antes da contratação.</div>`:'<span class="badge ok">Todos os materiais com embalagem válida</span>';drawOccChart(t)}
 function renderPlanning(){let t=totals();planMeta.textContent=`${db.plan.length} linhas • ${fmt(t.pieces)} peças • ${fmt(t.pallets)} pallets`;planRows.innerHTML=t.lines.map(x=>{let s=occStatus(x.status==='OK'?0.9:0);return `<tr><td>${esc(x.row.material)}</td><td>${esc(x.pk?.description||x.row.description||'')}</td><td class="num">${fmt(x.row.planned)}</td><td class="num">${fmt(x.row.firmed)}</td><td class="num">${fmt(x.qty)}</td><td class="num">${fmt(x.ipp)}</td><td class="num">${fmt(x.pallets)}</td><td><span class="badge ${x.status==='OK'?'ok':'bad'}">${x.status}</span></td></tr>`}).join('')}
-
-function receiptQty(r,mode='current'){
-  if(mode==='current')mode=$('qtyMode')?.value||'sum';
-  let p=+r.planned||0,f=+r.firmed||0;
-  if(mode==='firmed')return f>0?f:p;
-  if(mode==='planned')return p;
-  if(mode==='max')return Math.max(p,f);
-  return p+f;
-}
-function receivingWindowsData(){
-  let rows=db.dailyReceipts||[],pm=packageMap(),mode=$('windowReceiptMode')?.value||'current',byDate=new Map();
-  rows.forEach(r=>{
-    let q=receiptQty(r,mode);if(!q)return;
-    let pack=pm.get(String(r.material||'').trim().toUpperCase()),ipp=pack?+pack.itemsPerPallet||0:0,pals=ipp?Math.ceil(q/ipp):0;
-    let d=byDate.get(r.date)||{date:r.date,items:[],pieces:0,pallets:0,missing:0};
-    d.items.push({...r,quantity:q,pack,itemsPerPallet:ipp,pallets:pals,status:pack&&ipp?'OK':'SEM EMBALAGEM'});
-    d.pieces+=q;d.pallets+=pals;if(!pack||!ipp)d.missing++;
-    byDate.set(r.date,d);
-  });
-  return [...byDate.values()].sort((a,b)=>a.date.localeCompare(b.date)).map((w,i)=>{
-    let vehicles=w.pallets?Math.ceil(w.pallets/db.config.capacity):0,occ=vehicles?w.pallets/(vehicles*db.config.capacity):0;
-    let status=occ>db.config.maxOcc/100?'ACIMA DE 100%':occ<db.config.minOcc/100?'ABAIXO DE 85%':'OK';
-    return {...w,window:i+1,vehicles,occ,status};
-  });
-}
-function renderReceivingWindows(){
-  if(!$('receivingWindowCards'))return;
-  let ws=receivingWindowsData(),totPieces=ws.reduce((a,w)=>a+w.pieces,0),totPallets=ws.reduce((a,w)=>a+w.pallets,0),totVeh=ws.reduce((a,w)=>a+w.vehicles,0);
-  let avg=totVeh?totPallets/(totVeh*db.config.capacity):0;
-  $('windowKpis').innerHTML=[
-    ['Janelas por data',n(ws.length),'Datas com recebimento'],
-    ['Part Numbers',n(new Set((db.dailyReceipts||[]).map(x=>x.material)).size),'No período'],
-    ['Peças',n(totPieces),'Total nas janelas'],
-    ['Pallets',n(totPallets),'Calculado por item'],
-    ['Carretas',n(totVeh),'Necessidade por data'],
-    ['Ocupação média',pct(avg),'Meta '+db.config.minOcc+'%–'+db.config.maxOcc+'%']
-  ].map(x=>`<div class="card kpi"><div class="lab">${x[0]}</div><div class="val">${x[1]}</div><div class="foot">${x[2]}</div></div>`).join('');
-  if(!ws.length){
-    $('receivingWindowCards').innerHTML='<div class="notice">Importe um planejamento com datas para gerar as janelas de recebimento.</div>';return;
-  }
-  $('receivingWindowCards').innerHTML=ws.map(w=>{
-    let dt=new Date(w.date+'T00:00:00'),dateTxt=dt.toLocaleDateString('pt-BR'),week='S'+isoWeek(dt);
-    let uniquePN=new Set(w.items.map(x=>String(x.material).toUpperCase())).size;
-    return `<details class="receiving-window" open>
-      <summary>
-        <div class="rw-main"><b>Janela ${w.window} — ${dateTxt}</b><span class="pill">${week}</span></div>
-        <div class="rw-metrics">
-          <span><b>${n(uniquePN)}</b> Part Numbers</span>
-          <span><b>${n(w.pieces)}</b> peças</span>
-          <span><b>${n(w.pallets)}</b> pallets</span>
-          <span><b>${n(w.vehicles)}</b> carreta(s)</span>
-          <span>${statusBadge(w.status)} ${pct(w.occ)}</span>
-        </div>
-      </summary>
-      <div class="rw-body">
-        <div class="table-wrap"><table>
-          <thead><tr><th>Part Number</th><th>Descrição</th><th>Planned</th><th>Firmed</th><th>Qtd. entrega</th><th>Itens/Pallet</th><th>Pallets</th><th>Status</th></tr></thead>
-          <tbody>${w.items.sort((a,b)=>String(a.material).localeCompare(String(b.material))).map(r=>`<tr>
-            <td><b>${r.material}</b></td><td>${r.pack?.description||r.description||''}</td>
-            <td class="num">${n(r.planned)}</td><td class="num">${n(r.firmed)}</td><td class="num"><b>${n(r.quantity)}</b></td>
-            <td class="num">${r.itemsPerPallet?n(r.itemsPerPallet):'—'}</td><td class="num"><b>${r.status==='OK'?n(r.pallets):'—'}</b></td><td>${statusBadge(r.status)}</td>
-          </tr>`).join('')}</tbody>
-          <tfoot><tr><th colspan="4">Total Janela ${w.window}</th><th class="num">${n(w.pieces)}</th><th></th><th class="num">${n(w.pallets)}</th><th>${n(uniquePN)} PN</th></tr></tfoot>
-        </table></div>
-        <div class="rw-summary">
-          <span>Data: <b>${dateTxt}</b></span>
-          <span>Semana: <b>${week}</b></span>
-          <span>Ocupação: <b>${pct(w.occ)}</b></span>
-          <span>Capacidade usada: <b>${n(w.pallets)} / ${n(w.vehicles*db.config.capacity)} pallets</b></span>
-        </div>
-      </div>
-    </details>`;
-  }).join('');
-}
-function expandAllWindows(open){document.querySelectorAll('.receiving-window').forEach(d=>d.open=open)}
-
+function receivingQty(r,mode){if(mode==='current')mode=document.getElementById('qtyMode')?.value||'sum';let p=+r.planned||0,f=+r.firmed||0;if(mode==='firmed')return f>0?f:p;if(mode==='planned')return p;if(mode==='max')return Math.max(p,f);return p+f}
+function receivingWindowsData(){let mode=document.getElementById('windowReceiptMode')?.value||'current',packs=packIndex(),map=new Map();(db.dailyReceipts||[]).forEach(r=>{let qty=receivingQty(r,mode);if(!qty)return;let pk=packs[String(r.material||'').trim().toUpperCase()],ipp=pk?+pk.itemsPerPallet||0:0,pallets=ipp?Math.ceil(qty/ipp):0;let w=map.get(r.date)||{date:r.date,items:[],pieces:0,pallets:0};w.items.push({...r,qty,pk,ipp,pallets,status:pk&&ipp?'OK':'SEM EMBALAGEM'});w.pieces+=qty;w.pallets+=pallets;map.set(r.date,w)});return [...map.values()].sort((a,b)=>a.date.localeCompare(b.date)).map((w,i)=>{let vehicles=w.pallets?Math.ceil(w.pallets/db.config.capacity):0,occ=vehicles?w.pallets/(vehicles*db.config.capacity):0,st=occStatus(occ);return {...w,window:i+1,vehicles,occ,status:st[0],statusClass:st[1]}})}
+function renderReceivingWindows(){let cards=document.getElementById('receivingWindowCards'),kg=document.getElementById('windowKpis');if(!cards||!kg)return;let ws=receivingWindowsData(),pieces=ws.reduce((a,w)=>a+w.pieces,0),pallets=ws.reduce((a,w)=>a+w.pallets,0),vehicles=ws.reduce((a,w)=>a+w.vehicles,0),avg=vehicles?pallets/(vehicles*db.config.capacity):0,pn=new Set((db.dailyReceipts||[]).map(x=>String(x.material).toUpperCase())).size;kg.innerHTML=[kpi('Janelas por data',fmt(ws.length),'Datas com entrega'),kpi('Part Numbers',fmt(pn),'No período'),kpi('Peças',fmt(pieces),'Total'),kpi('Pallets',fmt(pallets),'Calculado'),kpi('Carretas',fmt(vehicles),'Necessidade'),kpi('Ocupação média',pct(avg),'Meta 85%–100%')].join('');if(!ws.length){cards.innerHTML='<div class="notice">Nenhuma janela diária encontrada. Reimporte o planejamento e selecione novamente o período.</div>';return}cards.innerHTML=ws.map(w=>{let d=new Date(w.date+'T00:00:00'),dateTxt=d.toLocaleDateString('pt-BR'),week='S'+isoWeek(d),unique=new Set(w.items.map(x=>String(x.material).toUpperCase())).size;return `<details class="receiving-window" open><summary><div class="rw-main"><b>Janela ${w.window} — ${dateTxt}</b><span class="pill">${week}</span></div><div class="rw-metrics"><span><b>${fmt(unique)}</b> PN</span><span><b>${fmt(w.pieces)}</b> peças</span><span><b>${fmt(w.pallets)}</b> pallets</span><span><b>${fmt(w.vehicles)}</b> carreta(s)</span><span class="badge ${w.statusClass}">${w.status} • ${pct(w.occ)}</span></div></summary><div class="rw-body"><div class="table-wrap"><table><thead><tr><th>Part Number</th><th>Descrição</th><th>Planned</th><th>Firmed</th><th>Qtd. entrega</th><th>Itens/Pallet</th><th>Pallets</th><th>Status</th></tr></thead><tbody>${w.items.map(r=>`<tr><td><b>${esc(r.material)}</b></td><td>${esc(r.pk?.description||r.description||'')}</td><td class="num">${fmt(r.planned)}</td><td class="num">${fmt(r.firmed)}</td><td class="num"><b>${fmt(r.qty)}</b></td><td class="num">${r.ipp?fmt(r.ipp):'—'}</td><td class="num"><b>${r.status==='OK'?fmt(r.pallets):'—'}</b></td><td><span class="badge ${r.status==='OK'?'ok':'bad'}">${r.status}</span></td></tr>`).join('')}</tbody><tfoot><tr><th colspan="4">Total da janela</th><th class="num">${fmt(w.pieces)}</th><th></th><th class="num">${fmt(w.pallets)}</th><th>${fmt(unique)} PN</th></tr></tfoot></table></div><div class="rw-summary"><span>Data: <b>${dateTxt}</b></span><span>Semana: <b>${week}</b></span><span>Ocupação: <b>${pct(w.occ)}</b></span><span>Capacidade: <b>${fmt(w.pallets)} / ${fmt(w.vehicles*db.config.capacity)} pallets</b></span></div></div></details>`}).join('')}
+function expandAllWindows(open){document.querySelectorAll('.receiving-window').forEach(x=>x.open=open)}
 function renderPackaging(){let q=(packSearch?.value||'').toLowerCase(),rows=db.packaging.filter(p=>!q||[p.material,p.description,p.supplier].some(v=>String(v||'').toLowerCase().includes(q)));packCount.textContent=db.packaging.length;packRows.innerHTML=rows.map(p=>{let i=db.packaging.indexOf(p);return `<tr><td>${esc(p.supplier)}</td><td><b>${esc(p.material)}</b></td><td>${esc(p.description)}</td><td class="num">${fmt(p.itemsPerBox)}</td><td class="num">${fmt(p.boxesPerPallet)}</td><td class="num"><b>${fmt(p.itemsPerPallet)}</b></td><td><button class="btn" onclick="openPackModal(${i})">Editar</button></td></tr>`}).join('')}
 function renderConfig(){let fields=[['capacity','Capacidade da carreta (pallets)'],['minOcc','Ocupação mínima (%)'],['maxOcc','Ocupação máxima (%)'],['cost','Custo por viagem (R$)'],['distance','Distância da rota (km)'],['ttw','Fator TTW kg CO₂e/km'],['wtt','Fator WTT kg CO₂e/km'],['windows','Janelas por semana'],['periodWeeks','Semanas no período'],['beforePerWeek','Veículos antes/semana'],['weekLabel','Identificação do período']];configFields.innerHTML=fields.map(([k,l])=>`<div class="field"><label>${l}</label><input id="cfg_${k}" ${k==='weekLabel'?'type="text"':'type="number" step="0.00001"'} value="${esc(db.config[k])}"></div>`).join('')}
 function saveConfig(){Object.keys(db.config).forEach(k=>{let e=document.getElementById('cfg_'+k);if(e)db.config[k]=k==='weekLabel'?e.value:+e.value});persist();render()}
@@ -155,25 +83,13 @@ function applyMapping(){
     if((ps&&!pe)||(!ps&&pe)||(fs&&!fe)||(!fs&&fe)){alert('Informe data inicial e final para cada período utilizado.');return}
     if(ps&&pe&&ps>pe){alert('No Planned Receipts, a data inicial deve ser anterior à final.');return}
     if(fs&&fe&&fs>fe){alert('No Firmed Receipts, a data inicial deve ser anterior à final.');return}
-    let agg=new Map(), daily=new Map();
-    let psDate=ps?new Date(ps+'T00:00:00'):null, peDate=pe?new Date(pe+'T23:59:59'):null;
-    let fsDate=fs?new Date(fs+'T00:00:00'):null, feDate=fe?new Date(fe+'T23:59:59'):null;
+    let agg=new Map(),daily=new Map();
+    let psDate=ps?new Date(ps+'T00:00:00'):null,peDate=pe?new Date(pe+'T23:59:59'):null,fsDate=fs?new Date(fs+'T00:00:00'):null,feDate=fe?new Date(fe+'T23:59:59'):null;
     currentRows.forEach(r=>{
       let mat=String(r[material]||'').trim();if(!mat)return;
       let typ=String(r[typeCol]||'').trim().toLowerCase(),isP=typ.includes('planned receipt'),isF=typ.includes('firmed receipt');if(!isP&&!isF)return;
       let desc=description?String(r[description]||''):'',key=mat.toUpperCase(),cur=agg.get(key)||{material:mat,description:desc,planned:0,firmed:0};
-      imp.dateCols.forEach(dc=>{
-        let inP=isP&&psDate&&peDate&&dc.date>=psDate&&dc.date<=peDate;
-        let inF=isF&&fsDate&&feDate&&dc.date>=fsDate&&dc.date<=feDate;
-        if(!inP&&!inF)return;
-        let q=num(r[dc.col]);if(!q)return;
-        let ds=isoDate(dc.date),dk=key+'|'+ds,day=daily.get(dk)||{material:mat,description:desc,date:ds,planned:0,firmed:0};
-        if(inP){day.planned+=q;cur.planned+=q}
-        if(inF){day.firmed+=q;cur.firmed+=q}
-        if(!day.description)day.description=desc;
-        daily.set(dk,day);
-      });
-      if(!cur.description)cur.description=desc;
+      imp.dateCols.forEach(dc=>{let inP=isP&&psDate&&peDate&&dc.date>=psDate&&dc.date<=peDate,inF=isF&&fsDate&&feDate&&dc.date>=fsDate&&dc.date<=feDate;if(!inP&&!inF)return;let q=num(r[dc.col]);if(!q)return;let ds=isoDate(dc.date),dk=key+'|'+ds,day=daily.get(dk)||{material:mat,description:desc,date:ds,planned:0,firmed:0};if(inP){day.planned+=q;cur.planned+=q}if(inF){day.firmed+=q;cur.firmed+=q}daily.set(dk,day)});
       agg.set(key,cur);
     });
     db.plan=[...agg.values()].filter(x=>x.planned||x.firmed);
@@ -190,4 +106,4 @@ function applyMapping(){
 function closeMapModal(){mapModal.classList.remove('show')}function reprocessPlan(){render()}function loadDemoPlan(){db.plan=clone(window.DEMO_PLAN||[]);persist();render()}
 function autoMap(cols){let defs={material:['material','item','part','codigo','número','numero'],description:['desc','descrição','descricao'],planned:['planned receipts','planned'],firmed:['firmed receipts','firmed'],supplier:['fornecedor','supplier'],itemsPerBox:['itens por caixa','items/box','parts/hu','pecas caixa','peças caixa'],boxesPerPallet:['caixas por pallet','box pallet','hu/pallet'],itemsPerPallet:['itens por pallet','total itens pallet','lote','parts/pallet']},o={};Object.keys(defs).forEach(k=>o[k]=cols.find(c=>defs[k].some(t=>String(c).toLowerCase().includes(t)))||cols[0]);return o}function num(v){if(typeof v==='number')return v;return +String(v||0).replace(/\s/g,'').replace(/\./g,'').replace(',','.')||0}function readWorkbook(file,cb){let r=new FileReader();r.onload=e=>{let wb=XLSX.read(e.target.result,{type:'array'}),ws=wb.Sheets[wb.SheetNames[0]];cb(XLSX.utils.sheet_to_json(ws,{defval:''}))};r.readAsArrayBuffer(file)}
 function exportBackup(){let b=new Blob([JSON.stringify(db,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='wk_transport_backup.json';a.click()}function exportProcessed(){let t=totals(),rows=t.lines.map(x=>({Material:x.row.material,Descricao:x.pk?.description||x.row.description,Planned:x.row.planned,Firmed:x.row.firmed,Quantidade:x.qty,ItensPallet:x.ipp,Pallets:x.pallets,Status:x.status})),ws=XLSX.utils.json_to_sheet(rows),wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Resultado');XLSX.writeFile(wb,'WK_resultado_planejamento.xlsx')}function resetAll(){if(confirm('Restaurar dados iniciais?')){db=clone(DEFAULT);persist();render()}}
-function render(){renderDashboard();renderPlanning();renderPackaging();renderConfig();renderImpacts();renderLoadSelectors()}render();
+function render(){renderDashboard();renderPlanning();renderReceivingWindows();renderPackaging();renderConfig();renderImpacts();renderLoadSelectors()}render();
