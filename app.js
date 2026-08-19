@@ -14,6 +14,82 @@ function kpi(label,value,note){return `<div class="card"><div class="kpi-label">
 function occStatus(o){return o>db.config.maxOcc/100?['ACIMA DE 100%','bad']:o<db.config.minOcc/100?['ABAIXO DE 85%','warn']:['OK','ok']}
 function renderDashboard(){let t=totals();kpiGrid.innerHTML=[kpi('Peças',fmt(t.pieces),'Quantidade calculada'),kpi('Pallets',fmt(t.pallets),'Pela base de embalagens'),kpi('Carretas/semana',fmt(t.perWeek),'Plano otimizado'),kpi('Ocupação média',pct(t.avg),'Alvo 85%–100%'),kpi('Saving',money(t.saving),db.config.weekLabel),kpi('CO₂ TTW evitado',fmt(t.ttw/1000,2)+' t','Estimativa')].join('');windowCards.innerHTML=t.windowPallets.map((p,i)=>`<div class="pill">Janela ${i+1}: ${p} pallets</div>`).join('')||'<div class="smalltxt">Sem planejamento.</div>';planSummary.innerHTML=`O plano possui <b>${fmt(t.pallets)} pallets</b> e requer <b>${t.perWeek} carreta(s) por semana</b> em <b>${db.config.windows} janela(s)</b>. Economia potencial no período: <b>${money(t.saving)}</b>.`;criticalSummary.innerHTML=t.crit.length?`<span class="badge bad">${t.crit.length} material(is) crítico(s)</span><div class="smalltxt" style="margin-top:8px">Cadastre ou corrija embalagem/lote antes da contratação.</div>`:'<span class="badge ok">Todos os materiais com embalagem válida</span>';drawOccChart(t)}
 function renderPlanning(){let t=totals();planMeta.textContent=`${db.plan.length} linhas • ${fmt(t.pieces)} peças • ${fmt(t.pallets)} pallets`;planRows.innerHTML=t.lines.map(x=>{let s=occStatus(x.status==='OK'?0.9:0);return `<tr><td>${esc(x.row.material)}</td><td>${esc(x.pk?.description||x.row.description||'')}</td><td class="num">${fmt(x.row.planned)}</td><td class="num">${fmt(x.row.firmed)}</td><td class="num">${fmt(x.qty)}</td><td class="num">${fmt(x.ipp)}</td><td class="num">${fmt(x.pallets)}</td><td><span class="badge ${x.status==='OK'?'ok':'bad'}">${x.status}</span></td></tr>`}).join('')}
+
+function receiptQty(r,mode='current'){
+  if(mode==='current')mode=$('qtyMode')?.value||'sum';
+  let p=+r.planned||0,f=+r.firmed||0;
+  if(mode==='firmed')return f>0?f:p;
+  if(mode==='planned')return p;
+  if(mode==='max')return Math.max(p,f);
+  return p+f;
+}
+function receivingWindowsData(){
+  let rows=db.dailyReceipts||[],pm=packageMap(),mode=$('windowReceiptMode')?.value||'current',byDate=new Map();
+  rows.forEach(r=>{
+    let q=receiptQty(r,mode);if(!q)return;
+    let pack=pm.get(String(r.material||'').trim().toUpperCase()),ipp=pack?+pack.itemsPerPallet||0:0,pals=ipp?Math.ceil(q/ipp):0;
+    let d=byDate.get(r.date)||{date:r.date,items:[],pieces:0,pallets:0,missing:0};
+    d.items.push({...r,quantity:q,pack,itemsPerPallet:ipp,pallets:pals,status:pack&&ipp?'OK':'SEM EMBALAGEM'});
+    d.pieces+=q;d.pallets+=pals;if(!pack||!ipp)d.missing++;
+    byDate.set(r.date,d);
+  });
+  return [...byDate.values()].sort((a,b)=>a.date.localeCompare(b.date)).map((w,i)=>{
+    let vehicles=w.pallets?Math.ceil(w.pallets/db.config.capacity):0,occ=vehicles?w.pallets/(vehicles*db.config.capacity):0;
+    let status=occ>db.config.maxOcc/100?'ACIMA DE 100%':occ<db.config.minOcc/100?'ABAIXO DE 85%':'OK';
+    return {...w,window:i+1,vehicles,occ,status};
+  });
+}
+function renderReceivingWindows(){
+  if(!$('receivingWindowCards'))return;
+  let ws=receivingWindowsData(),totPieces=ws.reduce((a,w)=>a+w.pieces,0),totPallets=ws.reduce((a,w)=>a+w.pallets,0),totVeh=ws.reduce((a,w)=>a+w.vehicles,0);
+  let avg=totVeh?totPallets/(totVeh*db.config.capacity):0;
+  $('windowKpis').innerHTML=[
+    ['Janelas por data',n(ws.length),'Datas com recebimento'],
+    ['Part Numbers',n(new Set((db.dailyReceipts||[]).map(x=>x.material)).size),'No período'],
+    ['Peças',n(totPieces),'Total nas janelas'],
+    ['Pallets',n(totPallets),'Calculado por item'],
+    ['Carretas',n(totVeh),'Necessidade por data'],
+    ['Ocupação média',pct(avg),'Meta '+db.config.minOcc+'%–'+db.config.maxOcc+'%']
+  ].map(x=>`<div class="card kpi"><div class="lab">${x[0]}</div><div class="val">${x[1]}</div><div class="foot">${x[2]}</div></div>`).join('');
+  if(!ws.length){
+    $('receivingWindowCards').innerHTML='<div class="notice">Importe um planejamento com datas para gerar as janelas de recebimento.</div>';return;
+  }
+  $('receivingWindowCards').innerHTML=ws.map(w=>{
+    let dt=new Date(w.date+'T00:00:00'),dateTxt=dt.toLocaleDateString('pt-BR'),week='S'+isoWeek(dt);
+    let uniquePN=new Set(w.items.map(x=>String(x.material).toUpperCase())).size;
+    return `<details class="receiving-window" open>
+      <summary>
+        <div class="rw-main"><b>Janela ${w.window} — ${dateTxt}</b><span class="pill">${week}</span></div>
+        <div class="rw-metrics">
+          <span><b>${n(uniquePN)}</b> Part Numbers</span>
+          <span><b>${n(w.pieces)}</b> peças</span>
+          <span><b>${n(w.pallets)}</b> pallets</span>
+          <span><b>${n(w.vehicles)}</b> carreta(s)</span>
+          <span>${statusBadge(w.status)} ${pct(w.occ)}</span>
+        </div>
+      </summary>
+      <div class="rw-body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>Part Number</th><th>Descrição</th><th>Planned</th><th>Firmed</th><th>Qtd. entrega</th><th>Itens/Pallet</th><th>Pallets</th><th>Status</th></tr></thead>
+          <tbody>${w.items.sort((a,b)=>String(a.material).localeCompare(String(b.material))).map(r=>`<tr>
+            <td><b>${r.material}</b></td><td>${r.pack?.description||r.description||''}</td>
+            <td class="num">${n(r.planned)}</td><td class="num">${n(r.firmed)}</td><td class="num"><b>${n(r.quantity)}</b></td>
+            <td class="num">${r.itemsPerPallet?n(r.itemsPerPallet):'—'}</td><td class="num"><b>${r.status==='OK'?n(r.pallets):'—'}</b></td><td>${statusBadge(r.status)}</td>
+          </tr>`).join('')}</tbody>
+          <tfoot><tr><th colspan="4">Total Janela ${w.window}</th><th class="num">${n(w.pieces)}</th><th></th><th class="num">${n(w.pallets)}</th><th>${n(uniquePN)} PN</th></tr></tfoot>
+        </table></div>
+        <div class="rw-summary">
+          <span>Data: <b>${dateTxt}</b></span>
+          <span>Semana: <b>${week}</b></span>
+          <span>Ocupação: <b>${pct(w.occ)}</b></span>
+          <span>Capacidade usada: <b>${n(w.pallets)} / ${n(w.vehicles*db.config.capacity)} pallets</b></span>
+        </div>
+      </div>
+    </details>`;
+  }).join('');
+}
+function expandAllWindows(open){document.querySelectorAll('.receiving-window').forEach(d=>d.open=open)}
+
 function renderPackaging(){let q=(packSearch?.value||'').toLowerCase(),rows=db.packaging.filter(p=>!q||[p.material,p.description,p.supplier].some(v=>String(v||'').toLowerCase().includes(q)));packCount.textContent=db.packaging.length;packRows.innerHTML=rows.map(p=>{let i=db.packaging.indexOf(p);return `<tr><td>${esc(p.supplier)}</td><td><b>${esc(p.material)}</b></td><td>${esc(p.description)}</td><td class="num">${fmt(p.itemsPerBox)}</td><td class="num">${fmt(p.boxesPerPallet)}</td><td class="num"><b>${fmt(p.itemsPerPallet)}</b></td><td><button class="btn" onclick="openPackModal(${i})">Editar</button></td></tr>`}).join('')}
 function renderConfig(){let fields=[['capacity','Capacidade da carreta (pallets)'],['minOcc','Ocupação mínima (%)'],['maxOcc','Ocupação máxima (%)'],['cost','Custo por viagem (R$)'],['distance','Distância da rota (km)'],['ttw','Fator TTW kg CO₂e/km'],['wtt','Fator WTT kg CO₂e/km'],['windows','Janelas por semana'],['periodWeeks','Semanas no período'],['beforePerWeek','Veículos antes/semana'],['weekLabel','Identificação do período']];configFields.innerHTML=fields.map(([k,l])=>`<div class="field"><label>${l}</label><input id="cfg_${k}" ${k==='weekLabel'?'type="text"':'type="number" step="0.00001"'} value="${esc(db.config[k])}"></div>`).join('')}
 function saveConfig(){Object.keys(db.config).forEach(k=>{let e=document.getElementById('cfg_'+k);if(e)db.config[k]=k==='weekLabel'?e.value:+e.value});persist();render()}
@@ -79,24 +155,36 @@ function applyMapping(){
     if((ps&&!pe)||(!ps&&pe)||(fs&&!fe)||(!fs&&fe)){alert('Informe data inicial e final para cada período utilizado.');return}
     if(ps&&pe&&ps>pe){alert('No Planned Receipts, a data inicial deve ser anterior à final.');return}
     if(fs&&fe&&fs>fe){alert('No Firmed Receipts, a data inicial deve ser anterior à final.');return}
-    let agg=new Map();
+    let agg=new Map(), daily=new Map();
+    let psDate=ps?new Date(ps+'T00:00:00'):null, peDate=pe?new Date(pe+'T23:59:59'):null;
+    let fsDate=fs?new Date(fs+'T00:00:00'):null, feDate=fe?new Date(fe+'T23:59:59'):null;
     currentRows.forEach(r=>{
       let mat=String(r[material]||'').trim();if(!mat)return;
       let typ=String(r[typeCol]||'').trim().toLowerCase(),isP=typ.includes('planned receipt'),isF=typ.includes('firmed receipt');if(!isP&&!isF)return;
-      let key=mat.toUpperCase(),cur=agg.get(key)||{material:mat,description:description?String(r[description]||''):'',planned:0,firmed:0};
-      if(isP&&ps&&pe)cur.planned+=rangeSum(r,imp.dateCols,ps,pe);
-      if(isF&&fs&&fe)cur.firmed+=rangeSum(r,imp.dateCols,fs,fe);
-      if(!cur.description&&description)cur.description=String(r[description]||'');
+      let desc=description?String(r[description]||''):'',key=mat.toUpperCase(),cur=agg.get(key)||{material:mat,description:desc,planned:0,firmed:0};
+      imp.dateCols.forEach(dc=>{
+        let inP=isP&&psDate&&peDate&&dc.date>=psDate&&dc.date<=peDate;
+        let inF=isF&&fsDate&&feDate&&dc.date>=fsDate&&dc.date<=feDate;
+        if(!inP&&!inF)return;
+        let q=num(r[dc.col]);if(!q)return;
+        let ds=isoDate(dc.date),dk=key+'|'+ds,day=daily.get(dk)||{material:mat,description:desc,date:ds,planned:0,firmed:0};
+        if(inP){day.planned+=q;cur.planned+=q}
+        if(inF){day.firmed+=q;cur.firmed+=q}
+        if(!day.description)day.description=desc;
+        daily.set(dk,day);
+      });
+      if(!cur.description)cur.description=desc;
       agg.set(key,cur);
     });
     db.plan=[...agg.values()].filter(x=>x.planned||x.firmed);
+    db.dailyReceipts=[...daily.values()].sort((a,b)=>a.date.localeCompare(b.date)||String(a.material).localeCompare(String(b.material)));
     db.selectedPeriods={planned:{start:ps,end:pe,label:dateRangeLabel(ps,pe)},firmed:{start:fs,end:fe,label:dateRangeLabel(fs,fe)}};
     let labels=[db.selectedPeriods.planned.label,db.selectedPeriods.firmed.label].filter(Boolean);if(labels.length)db.config.weekLabel=[...new Set(labels)].join(' / ');
     persist();closeMapModal();render();return;
   }
   let mm={};['material','description','planned','firmed'].forEach(k=>{let el=document.getElementById('map_'+k);mm[k]=el?el.value:''});
   if(!mm.material){alert('Mapeie a coluna Material.');return}
-  db.plan=currentRows.map(r=>({material:r[mm.material]||'',description:mm.description?r[mm.description]||'':'',planned:mm.planned?num(r[mm.planned]):0,firmed:mm.firmed?num(r[mm.firmed]):0})).filter(x=>x.material);
+  db.plan=currentRows.map(r=>({material:r[mm.material]||'',description:mm.description?r[mm.description]||'':'',planned:mm.planned?num(r[mm.planned]):0,firmed:mm.firmed?num(r[mm.firmed]):0})).filter(x=>x.material);db.dailyReceipts=[];
   persist();closeMapModal();render();
 }
 function closeMapModal(){mapModal.classList.remove('show')}function reprocessPlan(){render()}function loadDemoPlan(){db.plan=clone(window.DEMO_PLAN||[]);persist();render()}
