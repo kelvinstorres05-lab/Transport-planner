@@ -1,9 +1,9 @@
 const KEY='wk-transport-planner-v3';
-const DEFAULT={config:{capacity:52,minOcc:85,maxOcc:100,cost:1797.34,distance:68.8,ttw:0.78471,wtt:0.18538,windows:2,periodWeeks:18,beforePerWeek:3,weekLabel:'S34–S51'},packaging:window.INIT_PACKAGING||[],plan:window.DEMO_PLAN||[],dailyReceipts:[],history:[]};
+const DEFAULT={config:{capacity:52,minOcc:85,maxOcc:100,cost:1797.34,distance:68.8,ttw:0.78471,wtt:0.18538,windows:2,periodWeeks:18,beforePerWeek:3,weekLabel:'S34–S51',routeName:'TR1870FT67 - Nichibras/Hober > Forvia Goiana'},packaging:window.INIT_PACKAGING||[],plan:window.DEMO_PLAN||[],dailyReceipts:[],weeklyHistory:[],history:[]};
 let db=loadDB();let currentBook=null,currentRows=[],mapping={};let editingPack=-1;let angle=-36,drag=false,lastX=0,lastY=0;
-function clone(x){return JSON.parse(JSON.stringify(x))}function loadDB(){try{let x=JSON.parse(localStorage.getItem(KEY));if(x){if(!x.dailyReceipts)x.dailyReceipts=[];return x}return clone(DEFAULT)}catch(e){return clone(DEFAULT)}}function persist(){localStorage.setItem(KEY,JSON.stringify(db))}
+function clone(x){return JSON.parse(JSON.stringify(x))}function loadDB(){try{let x=JSON.parse(localStorage.getItem(KEY));if(x){if(!x.dailyReceipts)x.dailyReceipts=[];if(!x.weeklyHistory)x.weeklyHistory=[];if(!x.config.routeName)x.config.routeName='TR1870FT67 - Nichibras/Hober > Forvia Goiana';return x}return clone(DEFAULT)}catch(e){return clone(DEFAULT)}}function persist(){localStorage.setItem(KEY,JSON.stringify(db))}
 function fmt(v,d=0){return Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d})}function money(v){return Number(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}function pct(v){return fmt(v*100,1)+'%'}function esc(s){return String(s??'').replace(/[&<>\"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[m]))}
-const titles={dashboard:['Dashboard executivo','Visão consolidada da necessidade de transporte WK'],loading3d:['Carregamento 3D','Visualização prevista da ocupação por janela e veículo'],planning:['Planejamento semanal','Importe Planned Receipts e Firmed Receipts'],receivingWindows:['Janelas de Recebimento','Detalhamento diário por data e Part Number'],packaging:['Base de Embalagens','Cadastro editável de materiais e lotes'],impacts:['Impactos da otimização','Saving, viagens e CO₂ evitado'],config:['Configurações','Parâmetros operacionais do cálculo']};
+const titles={dashboard:['Dashboard executivo','Visão consolidada da necessidade de transporte WK'],loading3d:['Carregamento 3D','Visualização prevista da ocupação por janela e veículo'],planning:['Planejamento semanal','Importe Planned Receipts e Firmed Receipts'],receivingWindows:['Janelas de Recebimento','Detalhamento diário por data e Part Number'],weeklyHistory:['Histórico Semanal','Comparativo de capacidade, carretas, ocupação, saving e CO₂'],packaging:['Base de Embalagens','Cadastro editável de materiais e lotes'],impacts:['Impactos da otimização','Saving, viagens e CO₂ evitado'],config:['Configurações','Parâmetros operacionais do cálculo']};
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.getElementById(b.dataset.page).classList.add('active');pageTitle.textContent=titles[b.dataset.page][0];pageSub.textContent=titles[b.dataset.page][1];render()});
 function packIndex(){const m={};db.packaging.forEach(p=>{if(p.material)m[String(p.material).trim().toUpperCase()]=p});return m}
 function usedQty(r){let p=+r.planned||0,f=+r.firmed||0,m=document.getElementById('qtyMode')?.value||'sum';return m==='planned'?p:m==='firmed'?f:m==='max'?Math.max(p,f):p+f}
@@ -18,9 +18,141 @@ function receivingQty(r,mode){if(mode==='current')mode=document.getElementById('
 function receivingWindowsData(){let mode=document.getElementById('windowReceiptMode')?.value||'current',packs=packIndex(),map=new Map();(db.dailyReceipts||[]).forEach(r=>{let qty=receivingQty(r,mode);if(!qty)return;let pk=packs[String(r.material||'').trim().toUpperCase()],ipp=pk?+pk.itemsPerPallet||0:0,pallets=ipp?Math.ceil(qty/ipp):0;let w=map.get(r.date)||{date:r.date,items:[],pieces:0,pallets:0};w.items.push({...r,qty,pk,ipp,pallets,status:pk&&ipp?'OK':'SEM EMBALAGEM'});w.pieces+=qty;w.pallets+=pallets;map.set(r.date,w)});return [...map.values()].sort((a,b)=>a.date.localeCompare(b.date)).map((w,i)=>{let vehicles=w.pallets?Math.ceil(w.pallets/db.config.capacity):0,occ=vehicles?w.pallets/(vehicles*db.config.capacity):0,st=occStatus(occ);return {...w,window:i+1,vehicles,occ,status:st[0],statusClass:st[1]}})}
 function renderReceivingWindows(){let cards=document.getElementById('receivingWindowCards'),kg=document.getElementById('windowKpis');if(!cards||!kg)return;let ws=receivingWindowsData(),pieces=ws.reduce((a,w)=>a+w.pieces,0),pallets=ws.reduce((a,w)=>a+w.pallets,0),vehicles=ws.reduce((a,w)=>a+w.vehicles,0),avg=vehicles?pallets/(vehicles*db.config.capacity):0,pn=new Set((db.dailyReceipts||[]).map(x=>String(x.material).toUpperCase())).size;kg.innerHTML=[kpi('Janelas por data',fmt(ws.length),'Datas com entrega'),kpi('Part Numbers',fmt(pn),'No período'),kpi('Peças',fmt(pieces),'Total'),kpi('Pallets',fmt(pallets),'Calculado'),kpi('Carretas',fmt(vehicles),'Necessidade'),kpi('Ocupação média',pct(avg),'Meta 85%–100%')].join('');if(!ws.length){cards.innerHTML='<div class="notice">Nenhuma janela diária encontrada. Reimporte o planejamento e selecione novamente o período.</div>';return}cards.innerHTML=ws.map(w=>{let d=new Date(w.date+'T00:00:00'),dateTxt=d.toLocaleDateString('pt-BR'),week='S'+isoWeek(d),unique=new Set(w.items.map(x=>String(x.material).toUpperCase())).size;return `<details class="receiving-window" open><summary><div class="rw-main"><b>Janela ${w.window} — ${dateTxt}</b><span class="pill">${week}</span></div><div class="rw-metrics"><span><b>${fmt(unique)}</b> PN</span><span><b>${fmt(w.pieces)}</b> peças</span><span><b>${fmt(w.pallets)}</b> pallets</span><span><b>${fmt(w.vehicles)}</b> carreta(s)</span><span class="badge ${w.statusClass}">${w.status} • ${pct(w.occ)}</span></div></summary><div class="rw-body"><div class="table-wrap"><table><thead><tr><th>Part Number</th><th>Descrição</th><th>Planned</th><th>Firmed</th><th>Qtd. entrega</th><th>Itens/Pallet</th><th>Pallets</th><th>Status</th></tr></thead><tbody>${w.items.map(r=>`<tr><td><b>${esc(r.material)}</b></td><td>${esc(r.pk?.description||r.description||'')}</td><td class="num">${fmt(r.planned)}</td><td class="num">${fmt(r.firmed)}</td><td class="num"><b>${fmt(r.qty)}</b></td><td class="num">${r.ipp?fmt(r.ipp):'—'}</td><td class="num"><b>${r.status==='OK'?fmt(r.pallets):'—'}</b></td><td><span class="badge ${r.status==='OK'?'ok':'bad'}">${r.status}</span></td></tr>`).join('')}</tbody><tfoot><tr><th colspan="4">Total da janela</th><th class="num">${fmt(w.pieces)}</th><th></th><th class="num">${fmt(w.pallets)}</th><th>${fmt(unique)} PN</th></tr></tfoot></table></div><div class="rw-summary"><span>Data: <b>${dateTxt}</b></span><span>Semana: <b>${week}</b></span><span>Ocupação: <b>${pct(w.occ)}</b></span><span>Capacidade: <b>${fmt(w.pallets)} / ${fmt(w.vehicles*db.config.capacity)} pallets</b></span></div></div></details>`}).join('')}
 function expandAllWindows(open){document.querySelectorAll('.receiving-window').forEach(x=>x.open=open)}
+
+function weekNumberFromLabel(label){
+  let m=String(label||'').match(/S?W?(\d{1,2})/i);return m?+m[1]:null;
+}
+function currentPlanningWeek(){
+  let labels=[];
+  if(db.selectedPeriods){
+    [db.selectedPeriods.planned?.label,db.selectedPeriods.firmed?.label].filter(Boolean).forEach(x=>labels.push(x));
+  }
+  let wk=labels.length?weekNumberFromLabel(labels[0]):weekNumberFromLabel(db.config.weekLabel);
+  return wk||new Date().getWeek?.()||null;
+}
+function weekDateRangeFromDaily(){
+  let dates=(db.dailyReceipts||[]).map(x=>x.date).filter(Boolean).sort();
+  if(!dates.length)return '';
+  let a=new Date(dates[0]+'T00:00:00'),b=new Date(dates[dates.length-1]+'T00:00:00');
+  return `${a.toLocaleDateString('pt-BR')}–${b.toLocaleDateString('pt-BR')}`;
+}
+function saveWeeklyPlanning(){
+  let t=totals(),week=currentPlanningWeek();
+  if(!week){let x=prompt('Informe o número da semana (ex.: 35):');week=+x||null}
+  if(!week){alert('Não foi possível identificar a semana.');return}
+  let route=db.config.routeName||'Rota não definida',period=weekDateRangeFromDaily()||db.config.weekLabel||('W'+week);
+  let rec={
+    id:Date.now(),route,week,weekLabel:'W'+week,period,dateSaved:new Date().toLocaleString('pt-BR'),
+    pieces:t.pieces,pallets:t.pallets,vehicles:t.perWeek,occ:t.avg,
+    capacity:t.perWeek*db.config.capacity,capacityNominal:db.config.capacity,
+    costPerVehicle:db.config.cost,distance:db.config.distance,ttwFactor:db.config.ttw
+  };
+  let same=db.weeklyHistory.findIndex(x=>x.route===route&&+x.week===+week);
+  if(same>=0){
+    if(!confirm(`Já existe um planejamento salvo para ${route} - W${week}. Substituir pelo cenário atual?`))return;
+    db.weeklyHistory[same]=rec;
+  }else db.weeklyHistory.push(rec);
+  db.weeklyHistory.sort((a,b)=>a.route.localeCompare(b.route)||a.week-b.week);
+  persist();renderWeeklyHistory();alert(`Planejamento W${week} salvo no histórico.`);
+}
+function weeklyFiltered(){
+  let all=(db.weeklyHistory||[]).slice().sort((a,b)=>a.route.localeCompare(b.route)||a.week-b.week);
+  let route=document.getElementById('histRouteFilter')?.value||'ALL';
+  if(route!=='ALL')all=all.filter(x=>x.route===route);
+  let start=+document.getElementById('histStartWeek')?.value||null,end=+document.getElementById('histEndWeek')?.value||null;
+  if(start)all=all.filter(x=>+x.week>=start);if(end)all=all.filter(x=>+x.week<=end);
+  return all;
+}
+function renderHistoryFilters(){
+  let routeSel=document.getElementById('histRouteFilter'),startSel=document.getElementById('histStartWeek'),endSel=document.getElementById('histEndWeek');
+  if(!routeSel||!startSel||!endSel)return;
+  let routes=[...new Set((db.weeklyHistory||[]).map(x=>x.route))].sort(),weeks=[...new Set((db.weeklyHistory||[]).map(x=>+x.week))].sort((a,b)=>a-b);
+  let oldR=routeSel.value||'ALL',oldS=startSel.value,oldE=endSel.value;
+  routeSel.innerHTML='<option value="ALL">Todas as rotas</option>'+routes.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
+  if([...routeSel.options].some(o=>o.value===oldR))routeSel.value=oldR;
+  startSel.innerHTML='<option value="">Primeira disponível</option>'+weeks.map(w=>`<option value="${w}">W${w}</option>`).join('');
+  endSel.innerHTML='<option value="">Última disponível</option>'+weeks.map(w=>`<option value="${w}">W${w}</option>`).join('');
+  if(oldS&&[...startSel.options].some(o=>o.value===oldS))startSel.value=oldS;
+  if(oldE&&[...endSel.options].some(o=>o.value===oldE))endSel.value=oldE;
+}
+function historyComparisons(rows){
+  let mode=document.getElementById('histCompareMode')?.value||'previous',byRoute=new Map(),out=[];
+  rows.forEach(r=>{
+    let arr=byRoute.get(r.route)||[],ref=null;
+    if(mode==='first')ref=arr[0]||null; else ref=arr[arr.length-1]||null;
+    let delta=ref?r.vehicles-ref.vehicles:0;
+    let savingDelta=ref?(-delta)*(r.costPerVehicle||db.config.cost):0;
+    let avoidedKm=ref?(-delta)*(r.distance||db.config.distance):0;
+    let co2Delta=avoidedKm*(r.ttwFactor||db.config.ttw);
+    let cumulative=(arr.length?arr[arr.length-1]._cumSaving:0)+savingDelta;
+    let x={...r,_ref:ref,_delta:delta,_savingDelta:savingDelta,_co2Delta:co2Delta,_cumSaving:cumulative};
+    arr.push(x);byRoute.set(r.route,arr);out.push(x);
+  });
+  return out;
+}
+function renderWeeklyHistory(){
+  if(!document.getElementById('historyKpis'))return;
+  renderHistoryFilters();
+  let rows=historyComparisons(weeklyFiltered()),kg=document.getElementById('historyKpis');
+  let totalSaving=rows.reduce((a,x)=>a+x._savingDelta,0),totalCo2=rows.reduce((a,x)=>a+x._co2Delta,0),avgOcc=rows.length?rows.reduce((a,x)=>a+x.occ,0)/rows.length:0;
+  let first=rows[0],last=rows[rows.length-1],netDelta=(first&&last)?last.vehicles-first.vehicles:0;
+  kg.innerHTML=[
+    kpi('Semanas analisadas',fmt(rows.length),'No filtro atual'),
+    kpi('Carretas última semana',last?fmt(last.vehicles):'—',last?last.weekLabel:'Sem dados'),
+    kpi('Variação líquida',rows.length>1?`${netDelta>0?'+':''}${fmt(netDelta)}`:'—','Última vs primeira'),
+    kpi('Ocupação média',pct(avgOcc),'Período selecionado'),
+    kpi('Saving incremental',money(totalSaving),'Comparativo semanal'),
+    kpi('CO₂ evitado incremental',fmt(totalCo2/1000,2)+' t','TTW estimado')
+  ].join('');
+  let tbody=document.getElementById('weeklyHistoryRows');
+  tbody.innerHTML=rows.length?rows.map(x=>{
+    let dcl=x._delta<0?'ok':x._delta>0?'bad':'warn',deltaTxt=(x._delta>0?'+':'')+fmt(x._delta),capPct=x.capacity?x.pallets/x.capacity:0;
+    return `<tr><td>${esc(x.route)}</td><td><b>${x.weekLabel}</b></td><td>${esc(x.period||'')}</td><td class="num">${fmt(x.pieces)}</td><td class="num">${fmt(x.pallets)}</td><td class="num"><b>${fmt(x.vehicles)}</b></td><td><span class="badge ${dcl}">${deltaTxt}</span></td><td class="num">${pct(x.occ)}</td><td class="num">${fmt(x.pallets)} / ${fmt(x.capacity)} (${pct(capPct)})</td><td class="num">${money(x._savingDelta)}</td><td class="num">${money(x._cumSaving)}</td><td class="num">${fmt(x._co2Delta/1000,3)} t</td><td><button class="btn small danger" onclick="deleteWeeklyPlanning(${x.id})">Excluir</button></td></tr>`;
+  }).join(''):'<tr><td colspan="13"><div class="smalltxt">Nenhuma semana salva. Processe um planejamento e clique em “Salvar semana atual”.</div></td></tr>';
+  let summary=document.getElementById('historyPeriodSummary');
+  if(rows.length){
+    let minW=Math.min(...rows.map(x=>x.week)),maxW=Math.max(...rows.map(x=>x.week));
+    let minV=Math.min(...rows.map(x=>x.vehicles)),maxV=Math.max(...rows.map(x=>x.vehicles));
+    summary.innerHTML=`Período <b>W${minW}–W${maxW}</b>: foram analisadas <b>${rows.length} semanas</b>. A necessidade variou entre <b>${minV}</b> e <b>${maxV}</b> carretas/semana. Comparando a primeira com a última semana do filtro, a variação líquida foi de <b>${netDelta>0?'+':''}${netDelta} carreta(s)</b>. O saving incremental acumulado no comparativo selecionado é de <b>${money(totalSaving)}</b>, com <b>${fmt(totalCo2/1000,2)} t CO₂e TTW</b> evitadas quando há redução de viagens.`;
+  }else summary.innerHTML='Salve pelo menos uma semana de planejamento para iniciar o histórico.';
+  drawHistoryVehicles(rows);drawHistoryOccupancy(rows);drawHistorySaving(rows);
+}
+function deleteWeeklyPlanning(id){
+  if(confirm('Excluir este planejamento semanal do histórico?')){db.weeklyHistory=db.weeklyHistory.filter(x=>x.id!==id);persist();renderWeeklyHistory()}
+}
+function exportWeeklyHistory(){
+  if(!(db.weeklyHistory||[]).length){alert('Não há histórico para exportar.');return}
+  if(typeof XLSX==='undefined'){alert('Biblioteca Excel indisponível.');return}
+  let rows=historyComparisons(weeklyFiltered()).map(x=>({
+    'Rota':x.route,'Semana':x.weekLabel,'Período':x.period,'Peças':x.pieces,'Pallets':x.pallets,'Carretas':x.vehicles,
+    'Variação Carretas':x._delta,'Ocupação':x.occ,'Capacidade pallets':x.capacity,'Saving incremental':x._savingDelta,
+    'Saving acumulado':x._cumSaving,'CO2 TTW evitado kg':x._co2Delta
+  }));
+  let ws=XLSX.utils.json_to_sheet(rows),wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Histórico Semanal');XLSX.writeFile(wb,'WK_Historico_Semanal.xlsx');
+}
+function drawHistoryVehicles(rows){
+  let s=document.getElementById('histVehiclesChart');if(!s)return;s.innerHTML='';if(!rows.length)return;
+  let max=Math.max(1,...rows.map(x=>x.vehicles))*1.25,w=560/Math.max(1,rows.length);
+  rows.forEach((r,i)=>{let h=170*r.vehicles/max,x=70+i*w,y=215-h;s.appendChild(svgEl('rect',{x,y,width:Math.max(20,w-14),height:h,rx:6,fill:'#1f5f93'}));st(s,x+(w-14)/2,y-7,fmt(r.vehicles),11,'middle','#15345d','700');st(s,x+(w-14)/2,238,r.weekLabel,10)});
+  st(s,350,25,'Carretas programadas por semana',13,'middle','#15345d','700');
+}
+function drawHistoryOccupancy(rows){
+  let s=document.getElementById('histOccChart');if(!s)return;s.innerHTML='';if(!rows.length)return;
+  let base=215,w=560/Math.max(1,rows.length),mx=1.05;
+  [db.config.minOcc/100,db.config.maxOcc/100].forEach(v=>{let y=base-v/mx*170;s.appendChild(svgEl('line',{x1:65,y1:y,x2:650,y2:y,stroke:v>=1?'#b42318':'#9a6700','stroke-dasharray':'5 5'}));st(s,60,y+4,Math.round(v*100)+'%',10,'end')});
+  rows.forEach((r,i)=>{let h=Math.min(mx,r.occ)/mx*170,x=70+i*w,y=base-h,col=r.occ>=db.config.minOcc/100&&r.occ<=1?'#4f9b53':'#e0a92f';s.appendChild(svgEl('rect',{x,y,width:Math.max(20,w-14),height:h,rx:6,fill:col}));st(s,x+(w-14)/2,y-7,pct(r.occ),10);st(s,x+(w-14)/2,238,r.weekLabel,10)});
+}
+function drawHistorySaving(rows){
+  let s=document.getElementById('histSavingChart');if(!s)return;s.innerHTML='';if(!rows.length)return;
+  let vals=rows.map(x=>x._cumSaving),min=Math.min(0,...vals),max=Math.max(1,...vals),range=max-min||1;
+  let pts=rows.map((r,i)=>({x:60+i*580/Math.max(1,rows.length-1),y:215-((r._cumSaving-min)/range)*165,v:r._cumSaving,w:r.weekLabel}));
+  if(pts.length>1)s.appendChild(svgEl('polyline',{points:pts.map(p=>p.x+','+p.y).join(' '),fill:'none',stroke:'#1f5f93','stroke-width':4}));
+  pts.forEach((p,i)=>{s.appendChild(svgEl('circle',{cx:p.x,cy:p.y,r:4,fill:'#1f5f93'}));st(s,p.x,238,p.w,10);if(i===pts.length-1)st(s,p.x,p.y-10,money(p.v),11,'middle','#15345d','700')});
+}
+
 function renderPackaging(){let q=(packSearch?.value||'').toLowerCase(),rows=db.packaging.filter(p=>!q||[p.material,p.description,p.supplier].some(v=>String(v||'').toLowerCase().includes(q)));packCount.textContent=db.packaging.length;packRows.innerHTML=rows.map(p=>{let i=db.packaging.indexOf(p);return `<tr><td>${esc(p.supplier)}</td><td><b>${esc(p.material)}</b></td><td>${esc(p.description)}</td><td class="num">${fmt(p.itemsPerBox)}</td><td class="num">${fmt(p.boxesPerPallet)}</td><td class="num"><b>${fmt(p.itemsPerPallet)}</b></td><td><button class="btn" onclick="openPackModal(${i})">Editar</button></td></tr>`}).join('')}
-function renderConfig(){let fields=[['capacity','Capacidade da carreta (pallets)'],['minOcc','Ocupação mínima (%)'],['maxOcc','Ocupação máxima (%)'],['cost','Custo por viagem (R$)'],['distance','Distância da rota (km)'],['ttw','Fator TTW kg CO₂e/km'],['wtt','Fator WTT kg CO₂e/km'],['windows','Janelas por semana'],['periodWeeks','Semanas no período'],['beforePerWeek','Veículos antes/semana'],['weekLabel','Identificação do período']];configFields.innerHTML=fields.map(([k,l])=>`<div class="field"><label>${l}</label><input id="cfg_${k}" ${k==='weekLabel'?'type="text"':'type="number" step="0.00001"'} value="${esc(db.config[k])}"></div>`).join('')}
-function saveConfig(){Object.keys(db.config).forEach(k=>{let e=document.getElementById('cfg_'+k);if(e)db.config[k]=k==='weekLabel'?e.value:+e.value});persist();render()}
+function renderConfig(){let fields=[['capacity','Capacidade da carreta (pallets)'],['minOcc','Ocupação mínima (%)'],['maxOcc','Ocupação máxima (%)'],['cost','Custo por viagem (R$)'],['distance','Distância da rota (km)'],['ttw','Fator TTW kg CO₂e/km'],['wtt','Fator WTT kg CO₂e/km'],['windows','Janelas por semana'],['periodWeeks','Semanas no período'],['beforePerWeek','Veículos antes/semana'],['weekLabel','Identificação do período'],['routeName','Nome da rota']];configFields.innerHTML=fields.map(([k,l])=>`<div class="field"><label>${l}</label><input id="cfg_${k}" ${(k==='weekLabel'||k==='routeName')?'type="text"':'type="number" step="0.00001"'} value="${esc(db.config[k])}"></div>`).join('')}
+function saveConfig(){Object.keys(db.config).forEach(k=>{let e=document.getElementById('cfg_'+k);if(e)db.config[k]=(k==='weekLabel'||k==='routeName')?e.value:+e.value});persist();render()}
 function renderImpacts(){let t=totals();impactKpis.innerHTML=[kpi('Viagens evitadas',fmt(t.avoided),`${fmt(t.avoidedWeek)} por semana`),kpi('Redução',pct(t.red),'vs cenário anterior'),kpi('Saving',money(t.saving),db.config.weekLabel),kpi('Km evitados',fmt(t.km)+' km','No período'),kpi('CO₂ TTW',fmt(t.ttw/1000,2)+' t','Evitado'),kpi('CO₂ WTW',fmt(t.wtw/1000,2)+' t','Evitado')].join('');impactText.innerHTML=`A redução de <b>${db.config.beforePerWeek}</b> para <b>${t.perWeek}</b> veículo(s) semanais evita <b>${t.avoided}</b> viagens no período, aproximadamente <b>${fmt(t.km)} km</b> e <b>${fmt(t.ttw/1000,2)} t CO₂e TTW</b>.`;historyRows.innerHTML=(db.history||[]).map(h=>`<tr><td>${h.date}</td><td>${h.period}</td><td>${h.pallets}</td><td>${h.vehicles}</td><td>${h.occ}</td><td>${h.saving}</td><td>${h.co2}</td></tr>`).join('');drawImpactChart(t)}
 function saveScenario(){let t=totals();db.history.unshift({date:new Date().toLocaleString('pt-BR'),period:db.config.weekLabel,pallets:t.pallets,vehicles:t.perWeek,occ:pct(t.avg),saving:money(t.saving),co2:fmt(t.ttw/1000,2)+' t'});persist();render()}
 function drawOccChart(t){barChart('occChart',t.vehicles.map(v=>`J${v.window}-C${v.vehicle}`),t.vehicles.map(v=>v.occ*100),100,true)}function drawImpactChart(t){barChart('impactChart',['Antes','Depois'],[db.config.beforePerWeek,t.perWeek],Math.max(db.config.beforePerWeek,t.perWeek,1)*1.25,false)}function barChart(id,labels,vals,max,percent){let s=document.getElementById(id);if(!s)return;s.innerHTML='';let W=700,H=260,mx=max||Math.max(1,...vals)*1.2,w=560/Math.max(1,vals.length);vals.forEach((v,i)=>{let h=165*v/mx,x=70+i*w,y=210-h,c=percent?(v<db.config.minOcc?'#e6b800':v>db.config.maxOcc?'#c0504d':'#70ad47'):(i?'#7da6c7':'#1f4e79');let r=document.createElementNS('http://www.w3.org/2000/svg','rect');Object.entries({x,y,width:Math.max(22,w-16),height:h,rx:7,fill:c}).forEach(([k,a])=>r.setAttribute(k,a));s.appendChild(r);svgText(s,x+(w-16)/2,y-8,percent?fmt(v,1)+'%':fmt(v),12);svgText(s,x+(w-16)/2,234,labels[i],10)})}function svgText(s,x,y,v,size){let e=document.createElementNS('http://www.w3.org/2000/svg','text');e.setAttribute('x',x);e.setAttribute('y',y);e.setAttribute('font-size',size);e.setAttribute('text-anchor','middle');e.setAttribute('fill','#4b5563');e.textContent=v;s.appendChild(e)}
@@ -106,4 +238,4 @@ function applyMapping(){
 function closeMapModal(){mapModal.classList.remove('show')}function reprocessPlan(){render()}function loadDemoPlan(){db.plan=clone(window.DEMO_PLAN||[]);persist();render()}
 function autoMap(cols){let defs={material:['material','item','part','codigo','número','numero'],description:['desc','descrição','descricao'],planned:['planned receipts','planned'],firmed:['firmed receipts','firmed'],supplier:['fornecedor','supplier'],itemsPerBox:['itens por caixa','items/box','parts/hu','pecas caixa','peças caixa'],boxesPerPallet:['caixas por pallet','box pallet','hu/pallet'],itemsPerPallet:['itens por pallet','total itens pallet','lote','parts/pallet']},o={};Object.keys(defs).forEach(k=>o[k]=cols.find(c=>defs[k].some(t=>String(c).toLowerCase().includes(t)))||cols[0]);return o}function num(v){if(typeof v==='number')return v;return +String(v||0).replace(/\s/g,'').replace(/\./g,'').replace(',','.')||0}function readWorkbook(file,cb){let r=new FileReader();r.onload=e=>{let wb=XLSX.read(e.target.result,{type:'array'}),ws=wb.Sheets[wb.SheetNames[0]];cb(XLSX.utils.sheet_to_json(ws,{defval:''}))};r.readAsArrayBuffer(file)}
 function exportBackup(){let b=new Blob([JSON.stringify(db,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='wk_transport_backup.json';a.click()}function exportProcessed(){let t=totals(),rows=t.lines.map(x=>({Material:x.row.material,Descricao:x.pk?.description||x.row.description,Planned:x.row.planned,Firmed:x.row.firmed,Quantidade:x.qty,ItensPallet:x.ipp,Pallets:x.pallets,Status:x.status})),ws=XLSX.utils.json_to_sheet(rows),wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Resultado');XLSX.writeFile(wb,'WK_resultado_planejamento.xlsx')}function resetAll(){if(confirm('Restaurar dados iniciais?')){db=clone(DEFAULT);persist();render()}}
-function render(){renderDashboard();renderPlanning();renderReceivingWindows();renderPackaging();renderConfig();renderImpacts();renderLoadSelectors()}render();
+function render(){renderDashboard();renderPlanning();renderReceivingWindows();renderWeeklyHistory();renderPackaging();renderConfig();renderImpacts();renderLoadSelectors()}render();
