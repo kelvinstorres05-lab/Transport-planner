@@ -15,3 +15,11 @@
 @media(max-width:600px){.history-filter{grid-template-columns:1fr}}
 
 .supplier-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px}.supplier-card{border:1px solid #d7dde5;border-radius:11px;padding:12px;background:#f8fbfe}.supplier-title{font-weight:800;color:#17365d;margin-bottom:7px}.supplier-metrics{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:#596777;margin-bottom:6px}.supplier-section{margin-top:14px;padding-top:12px;border-top:1px solid #e1e6eb}.supplier-section h3{margin:0 0 3px;color:#17365d;font-size:15px}.supplier-load{border:1px solid #d7dde5;border-radius:10px;margin-top:8px;overflow:hidden;background:#fff}.supplier-load summary{cursor:pointer;padding:11px;background:#f6f9fc;display:flex;justify-content:space-between;gap:10px;align-items:center}.supplier-load-body{padding:10px}.decision-strip{display:flex;gap:12px;flex-wrap:wrap;padding:10px;background:#eef7ff;border:1px solid #c7def4;border-radius:8px;margin-bottom:9px;font-size:12px;color:#31506d}
+
+.manual-plan-status{margin:12px 0}
+.draggable-receipt{cursor:grab;transition:opacity .15s,background .15s}
+.draggable-receipt:hover{background:#f4f9fd}
+.draggable-receipt.dragging{opacity:.35}
+.drag-handle{font-weight:900;color:#7b8a97;letter-spacing:-3px;cursor:grab}
+.receiving-window.drop-active{outline:3px solid #4e8fc4;outline-offset:2px;background:#eef7ff}
+.move-select{min-width:120px;padding:5px 7px;font-size:11px}
