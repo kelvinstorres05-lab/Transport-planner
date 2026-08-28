@@ -19,6 +19,34 @@ function renderSupplierPlanSummary(lines){let el=document.getElementById('suppli
 
 function renderPlanning(){let t=totals();planMeta.textContent=`${db.plan.length} linhas • ${fmt(t.pieces)} peças • ${fmt(t.pallets)} pallets`;planRows.innerHTML=t.lines.map(x=>`<tr><td><b>${esc(x.pk?.supplier||'SEM FORNECEDOR')}</b></td><td>${esc(x.row.material)}</td><td>${esc(x.pk?.description||x.row.description||'')}</td><td class="num">${fmt(x.row.planned)}</td><td class="num">${fmt(x.row.firmed)}</td><td class="num">${fmt(x.qty)}</td><td class="num">${fmt(x.ipp)}</td><td class="num">${fmt(x.pallets)}</td><td><span class="badge ${x.status==='OK'?'ok':'bad'}">${x.status}</span></td></tr>`).join('');renderSupplierPlanSummary(t.lines)}
 
+let selectedReceiptIds=new Set();
+function updateBulkSelectionUI(){
+  let c=selectedReceiptIds.size,el=document.getElementById('bulkSelectedCount');
+  if(el)el.textContent=`${fmt(c)} item(ns) selecionado(s)`;
+  document.querySelectorAll('.receipt-select').forEach(cb=>cb.checked=selectedReceiptIds.has(cb.dataset.id));
+  document.querySelectorAll('.draggable-receipt').forEach(tr=>tr.classList.toggle('selected-receipt',selectedReceiptIds.has(tr.dataset.receiptId)));
+}
+function toggleReceiptSelection(id,checked){if(checked)selectedReceiptIds.add(id);else selectedReceiptIds.delete(id);updateBulkSelectionUI()}
+function clearReceiptSelection(){selectedReceiptIds.clear();updateBulkSelectionUI()}
+function visibleReceiptIds(){return [...document.querySelectorAll('.receipt-select')].map(x=>x.dataset.id).filter(Boolean)}
+function selectAllVisibleReceipts(){visibleReceiptIds().forEach(id=>selectedReceiptIds.add(id));updateBulkSelectionUI()}
+function populateBulkMoveTargets(){
+  let sel=document.getElementById('bulkMoveTarget');if(!sel)return;
+  let old=sel.value,ws=receivingWindowsData();
+  sel.innerHTML='<option value="">Mover selecionados para...</option>'+ws.map(w=>`<option value="${w.date}">${ptDate(w.date)} • Janela ${w.window}</option>`).join('');
+  if([...sel.options].some(o=>o.value===old))sel.value=old;
+}
+function moveSelectedReceipts(targetDate){
+  targetDate=targetDate||document.getElementById('bulkMoveTarget')?.value;
+  if(!selectedReceiptIds.size){alert('Selecione pelo menos um Part Number.');return}
+  if(!targetDate){alert('Selecione a janela/data de destino.');return}
+  ensureReceiptAssignments();let moved=0;
+  (db.dailyReceipts||[]).forEach(r=>{if(selectedReceiptIds.has(r.receiptId)&&currentReceiptDate(r)!==targetDate){r.assignedDate=targetDate;moved++}});
+  if(!moved){alert('Os itens selecionados já estão nessa janela.');return}
+  markManualDirty();selectedReceiptIds.clear();persist();renderReceivingWindows();
+  alert(`${moved} Part Number(s) movimentado(s) para ${ptDate(targetDate)}.`);
+}
+
 function ensureReceiptAssignments(){
   (db.dailyReceipts||[]).forEach((r,i)=>{
     if(!r.receiptId)r.receiptId=`R${i}_${String(r.material||'').replace(/[^A-Za-z0-9]/g,'')}_${r.date||''}`;
@@ -40,22 +68,26 @@ function markManualDirty(){
   if(el){let c=movedReceiptCount();el.className='notice manual-plan-status warnbox';el.innerHTML=`⚠ <b>${fmt(c)} Part Number(s) movimentado(s)</b> entre janelas. Os itens alterados estão destacados em amarelo. Clique em <b>Reprocessar cenário</b> para aplicar o novo plano aos indicadores.`}
 }
 function dragReceiptStart(ev,id){
-  ev.dataTransfer.setData('text/plain',id);
-  ev.dataTransfer.effectAllowed='move';
-  ev.currentTarget.classList.add('dragging');
+  if(selectedReceiptIds.has(id)&&selectedReceiptIds.size>1){
+    ev.dataTransfer.setData('text/plain','MULTI');
+    ev.dataTransfer.setData('application/x-receipt-ids',JSON.stringify([...selectedReceiptIds]));
+  }else{ev.dataTransfer.setData('text/plain',id)}
+  ev.dataTransfer.effectAllowed='move';ev.currentTarget.classList.add('dragging');
 }
 function dragReceiptEnd(ev){ev.currentTarget.classList.remove('dragging')}
 function allowWindowDrop(ev){ev.preventDefault();ev.dataTransfer.dropEffect='move';ev.currentTarget.classList.add('drop-active')}
 function leaveWindowDrop(ev){ev.currentTarget.classList.remove('drop-active')}
 function dropReceiptToWindow(ev,targetDate){
   ev.preventDefault();ev.currentTarget.classList.remove('drop-active');
-  let id=ev.dataTransfer.getData('text/plain'),r=(db.dailyReceipts||[]).find(x=>x.receiptId===id);
-  if(!r)return;
-  let old=currentReceiptDate(r);
-  if(old===targetDate)return;
-  r.assignedDate=targetDate;
-  markManualDirty();
-  renderReceivingWindows();
+  let id=ev.dataTransfer.getData('text/plain');
+  if(id==='MULTI'){
+    let ids=[];try{ids=JSON.parse(ev.dataTransfer.getData('application/x-receipt-ids')||'[]')}catch(e){}
+    if(!ids.length)ids=[...selectedReceiptIds];let moved=0;
+    (db.dailyReceipts||[]).forEach(r=>{if(ids.includes(r.receiptId)&&currentReceiptDate(r)!==targetDate){r.assignedDate=targetDate;moved++}});
+    if(moved){markManualDirty();selectedReceiptIds.clear();persist();renderReceivingWindows()}return;
+  }
+  let r=(db.dailyReceipts||[]).find(x=>x.receiptId===id);if(!r)return;
+  let old=currentReceiptDate(r);if(old===targetDate)return;r.assignedDate=targetDate;markManualDirty();persist();renderReceivingWindows();
 }
 function moveReceiptSelect(id,targetDate){
   let r=(db.dailyReceipts||[]).find(x=>x.receiptId===id);if(!r)return;
@@ -75,6 +107,7 @@ function resetManualPlan(){
   if(!hasManualMoves()&&!db.manualPlanActive){alert('O planejamento já está na distribuição original.');return}
   if(!confirm('Restaurar todos os Part Numbers para as datas originais da última importação?'))return;
   (db.dailyReceipts||[]).forEach(r=>r.assignedDate=r.originalDate||r.date);
+  selectedReceiptIds.clear();
   db.manualPlanActive=false;persist();render();
   let el=document.getElementById('manualPlanStatus');
   if(el){el.className='notice manual-plan-status';el.innerHTML='✓ Distribuição original restaurada. Nenhum Part Number permanece marcado como remanejado.'}
@@ -85,7 +118,8 @@ function receivingWindowsData(){ensureReceiptAssignments();let mode=document.get
 function supplierGroupsForWindow(w){let m=new Map();w.items.forEach(r=>{let supplier=String(r.supplier||r.pk?.supplier||'SEM FORNECEDOR').trim()||'SEM FORNECEDOR',g=m.get(supplier)||{supplier,pn:new Set(),pieces:0,pallets:0,items:[]};g.pn.add(String(r.material).toUpperCase());g.pieces+=+r.qty||0;g.pallets+=+r.pallets||0;g.items.push(r);m.set(supplier,g)});return [...m.values()].map(g=>({...g,pnCount:g.pn.size})).sort((a,b)=>b.pallets-a.pallets||b.pieces-a.pieces)}
 function supplierDecisionCard(g,w){let remaining=Math.max(0,w.pallets-g.pallets),newVehicles=remaining?Math.ceil(remaining/db.config.capacity):0,newOcc=newVehicles?remaining/(newVehicles*db.config.capacity):0,vehDelta=newVehicles-w.vehicles,decision=vehDelta<0?`Reduz ${Math.abs(vehDelta)} carreta(s)`:vehDelta>0?`Aumenta ${vehDelta} carreta(s)`:'Não altera nº de carretas';return `<details class=\"supplier-load\"><summary><div><b>${esc(g.supplier)}</b><div class=\"smalltxt\">${fmt(g.pnCount)} PN • ${fmt(g.pieces)} peças • ${fmt(g.pallets)} pallets • ${pct(w.pallets?g.pallets/w.pallets:0)} da janela</div></div><span class=\"badge ${vehDelta<0?'ok':'warn'}\">${decision}</span></summary><div class=\"supplier-load-body\"><div class=\"decision-strip\"><span>Se retirar/remanejar: <b>-${fmt(g.pallets)} pallets</b></span><span>Restam: <b>${fmt(remaining)} pallets</b></span><span>Carretas: <b>${fmt(w.vehicles)} → ${fmt(newVehicles)}</b></span><span>Nova ocupação: <b>${pct(newOcc)}</b></span><span>Saving potencial: <b>${money((w.vehicles-newVehicles)*db.config.cost)}</b></span></div><div class=\"table-wrap\"><table><thead><tr><th>Part Number</th><th>Descrição</th><th>Qtd.</th><th>Pallets</th></tr></thead><tbody>${g.items.map(r=>`<tr><td><b>${esc(r.material)}</b></td><td>${esc(r.pk?.description||r.description||'')}</td><td class=\"num\">${fmt(r.qty)}</td><td class=\"num\">${r.status==='OK'?fmt(r.pallets):'—'}</td></tr>`).join('')}</tbody></table></div></div></details>`}
 
-function renderReceivingWindows(){let cards=document.getElementById('receivingWindowCards'),kg=document.getElementById('windowKpis');if(!cards||!kg)return;let ws=receivingWindowsData(),pieces=ws.reduce((a,w)=>a+w.pieces,0),pallets=ws.reduce((a,w)=>a+w.pallets,0),vehicles=ws.reduce((a,w)=>a+w.vehicles,0),avg=vehicles?pallets/(vehicles*db.config.capacity):0,pn=new Set((db.dailyReceipts||[]).map(x=>String(x.material).toUpperCase())).size;kg.innerHTML=[kpi('Janelas por data',fmt(ws.length),'Datas com entrega'),kpi('Part Numbers',fmt(pn),'No período'),kpi('Peças',fmt(pieces),'Total'),kpi('Pallets',fmt(pallets),'Calculado'),kpi('Carretas',fmt(vehicles),'Necessidade'),kpi('Ocupação média',pct(avg),'Meta 85%–100%')].join('');if(!ws.length){cards.innerHTML='<div class="notice">Nenhuma janela diária encontrada. Reimporte o planejamento e selecione novamente o período.</div>';return}cards.innerHTML=ws.map(w=>{let d=new Date(w.date+'T00:00:00'),dateTxt=d.toLocaleDateString('pt-BR'),week='S'+isoWeek(d),unique=new Set(w.items.map(x=>String(x.material).toUpperCase())).size;return `<details class="receiving-window" open data-date="${w.date}" ondragover="allowWindowDrop(event)" ondragleave="leaveWindowDrop(event)" ondrop="dropReceiptToWindow(event,'${w.date}')"><summary><div class="rw-main"><b>Janela ${w.window} — ${dateTxt}</b><span class="pill">${week}</span></div><div class="rw-metrics"><span><b>${fmt(unique)}</b> PN</span><span><b>${fmt(w.pieces)}</b> peças</span><span><b>${fmt(w.pallets)}</b> pallets</span><span><b>${fmt(w.vehicles)}</b> carreta(s)</span><span class="badge ${w.statusClass}">${w.status} • ${pct(w.occ)}</span></div></summary>${w.items.some(receiptWasMoved)?`<div class="window-move-alert">⚠ Esta janela contém <b>${fmt(w.items.filter(receiptWasMoved).length)} Part Number(s) remanejado(s)</b>. Revise antes de fechar o transporte.</div>`:''}<div class="rw-body"><div class="table-wrap"><table><thead><tr><th>Fornecedor</th><th>Part Number</th><th>Descrição</th><th>Planned</th><th>Firmed</th><th>Qtd. entrega</th><th>Itens/Pallet</th><th>Pallets</th><th>Status</th><th>Mover para</th></tr></thead><tbody>${w.items.map(r=>`<tr class="draggable-receipt ${receiptWasMoved(r)?'moved-receipt':''}" draggable="true" ondragstart="dragReceiptStart(event,'${r.receiptId}')" ondragend="dragReceiptEnd(event)" title="${receiptWasMoved(r)?'ITEM REMANEJADO: '+ptDate(r.originalDate)+' → '+ptDate(currentReceiptDate(r)):'Arraste este Part Number para outra janela'}"><td><span class="drag-handle">⋮⋮</span> <b>${esc(r.supplier||r.pk?.supplier||'SEM FORNECEDOR')}</b></td><td><b>${esc(r.material)}</b>${receiptWasMoved(r)?`<div class="move-alert">⚠ Movido de ${ptDate(r.originalDate)} → ${ptDate(currentReceiptDate(r))}</div>`:''}</td><td>${esc(r.pk?.description||r.description||'')}</td><td class="num">${fmt(r.planned)}</td><td class="num">${fmt(r.firmed)}</td><td class="num"><b>${fmt(r.qty)}</b></td><td class="num">${r.ipp?fmt(r.ipp):'—'}</td><td class="num"><b>${r.status==='OK'?fmt(r.pallets):'—'}</b></td><td><span class="badge ${r.status==='OK'?'ok':'bad'}">${r.status}</span></td><td><select class="move-select" onchange="if(this.value){moveReceiptSelect('${r.receiptId}',this.value);this.value=''}"><option value="">Mover...</option>${receivingWindowsData().filter(x=>x.date!==w.date).map(x=>`<option value="${x.date}">${new Date(x.date+'T00:00:00').toLocaleDateString('pt-BR')}</option>`).join('')}</select></td></tr>`).join('')}</tbody><tfoot><tr><th colspan="5">Total da janela</th><th class="num">${fmt(w.pieces)}</th><th></th><th class="num">${fmt(w.pallets)}</th><th>${fmt(unique)} PN</th><th></th></tr></tfoot></table></div><div class="supplier-section"><h3>Carga por fornecedor</h3><div class="smalltxt">Use esta visão para decidir cortes ou remanejamentos e visualizar o impacto na janela.</div>${supplierGroupsForWindow(w).map(g=>supplierDecisionCard(g,w)).join('')}</div><div class="rw-summary"><span>Data: <b>${dateTxt}</b></span><span>Semana: <b>${week}</b></span><span>Ocupação: <b>${pct(w.occ)}</b></span><span>Capacidade: <b>${fmt(w.pallets)} / ${fmt(w.vehicles*db.config.capacity)} pallets</b></span></div></div></details>`}).join('')}
+function renderReceivingWindows(){let cards=document.getElementById('receivingWindowCards'),kg=document.getElementById('windowKpis');if(!cards||!kg)return;let ws=receivingWindowsData(),pieces=ws.reduce((a,w)=>a+w.pieces,0),pallets=ws.reduce((a,w)=>a+w.pallets,0),vehicles=ws.reduce((a,w)=>a+w.vehicles,0),avg=vehicles?pallets/(vehicles*db.config.capacity):0,pn=new Set((db.dailyReceipts||[]).map(x=>String(x.material).toUpperCase())).size;kg.innerHTML=[kpi('Janelas por data',fmt(ws.length),'Datas com entrega'),kpi('Part Numbers',fmt(pn),'No período'),kpi('Peças',fmt(pieces),'Total'),kpi('Pallets',fmt(pallets),'Calculado'),kpi('Carretas',fmt(vehicles),'Necessidade'),kpi('Ocupação média',pct(avg),'Meta 85%–100%')].join('');if(!ws.length){cards.innerHTML='<div class="notice">Nenhuma janela diária encontrada. Reimporte o planejamento e selecione novamente o período.</div>';return}cards.innerHTML=ws.map(w=>{let d=new Date(w.date+'T00:00:00'),dateTxt=d.toLocaleDateString('pt-BR'),week='S'+isoWeek(d),unique=new Set(w.items.map(x=>String(x.material).toUpperCase())).size;return `<details class="receiving-window" open data-date="${w.date}" ondragover="allowWindowDrop(event)" ondragleave="leaveWindowDrop(event)" ondrop="dropReceiptToWindow(event,'${w.date}')"><summary><div class="rw-main"><b>Janela ${w.window} — ${dateTxt}</b><span class="pill">${week}</span></div><div class="rw-metrics"><span><b>${fmt(unique)}</b> PN</span><span><b>${fmt(w.pieces)}</b> peças</span><span><b>${fmt(w.pallets)}</b> pallets</span><span><b>${fmt(w.vehicles)}</b> carreta(s)</span><span class="badge ${w.statusClass}">${w.status} • ${pct(w.occ)}</span></div></summary>${w.items.some(receiptWasMoved)?`<div class="window-move-alert">⚠ Esta janela contém <b>${fmt(w.items.filter(receiptWasMoved).length)} Part Number(s) remanejado(s)</b>. Revise antes de fechar o transporte.</div>`:''}<div class="rw-body"><div class="table-wrap"><table><thead><tr><th class="sel-col">✓</th><th>Fornecedor</th><th>Part Number</th><th>Descrição</th><th>Planned</th><th>Firmed</th><th>Qtd. entrega</th><th>Itens/Pallet</th><th>Pallets</th><th>Status</th><th>Mover para</th></tr></thead><tbody>${w.items.map(r=>`<tr data-receipt-id="${r.receiptId}" class="draggable-receipt ${receiptWasMoved(r)?'moved-receipt':''} ${selectedReceiptIds.has(r.receiptId)?'selected-receipt':''}" draggable="true" ondragstart="dragReceiptStart(event,'${r.receiptId}')" ondragend="dragReceiptEnd(event)" title="${receiptWasMoved(r)?'ITEM REMANEJADO: '+ptDate(r.originalDate)+' → '+ptDate(currentReceiptDate(r)):'Arraste este Part Number para outra janela'}"><td class="sel-col"><input type="checkbox" class="receipt-select" data-id="${r.receiptId}" ${selectedReceiptIds.has(r.receiptId)?'checked':''} onchange="toggleReceiptSelection('${r.receiptId}',this.checked)" onclick="event.stopPropagation()"></td><td><span class="drag-handle">⋮⋮</span> <b>${esc(r.supplier||r.pk?.supplier||'SEM FORNECEDOR')}</b></td><td><b>${esc(r.material)}</b>${receiptWasMoved(r)?`<div class="move-alert">⚠ Movido de ${ptDate(r.originalDate)} → ${ptDate(currentReceiptDate(r))}</div>`:''}</td><td>${esc(r.pk?.description||r.description||'')}</td><td class="num">${fmt(r.planned)}</td><td class="num">${fmt(r.firmed)}</td><td class="num"><b>${fmt(r.qty)}</b></td><td class="num">${r.ipp?fmt(r.ipp):'—'}</td><td class="num"><b>${r.status==='OK'?fmt(r.pallets):'—'}</b></td><td><span class="badge ${r.status==='OK'?'ok':'bad'}">${r.status}</span></td><td><select class="move-select" onchange="if(this.value){moveReceiptSelect('${r.receiptId}',this.value);this.value=''}"><option value="">Mover...</option>${receivingWindowsData().filter(x=>x.date!==w.date).map(x=>`<option value="${x.date}">${new Date(x.date+'T00:00:00').toLocaleDateString('pt-BR')}</option>`).join('')}</select></td></tr>`).join('')}</tbody><tfoot><tr><th colspan="6">Total da janela</th><th class="num">${fmt(w.pieces)}</th><th></th><th class="num">${fmt(w.pallets)}</th><th>${fmt(unique)} PN</th><th></th></tr></tfoot></table></div><div class="supplier-section"><h3>Carga por fornecedor</h3><div class="smalltxt">Use esta visão para decidir cortes ou remanejamentos e visualizar o impacto na janela.</div>${supplierGroupsForWindow(w).map(g=>supplierDecisionCard(g,w)).join('')}</div><div class="rw-summary"><span>Data: <b>${dateTxt}</b></span><span>Semana: <b>${week}</b></span><span>Ocupação: <b>${pct(w.occ)}</b></span><span>Capacidade: <b>${fmt(w.pallets)} / ${fmt(w.vehicles*db.config.capacity)} pallets</b></span></div></div></details>`}).join('')populateBulkMoveTargets();updateBulkSelectionUI();
+}
 function expandAllWindows(open){document.querySelectorAll('.receiving-window').forEach(x=>x.open=open)}
 
 function weekNumberFromLabel(label){
