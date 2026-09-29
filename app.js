@@ -17,7 +17,7 @@ function supplierNameForLine(line){return String(line.pk?.supplier||line.pack?.s
 function supplierSummaryFromLines(lines){let m=new Map();lines.forEach(x=>{let supplier=supplierNameForLine(x),cur=m.get(supplier)||{supplier,pn:new Set(),pieces:0,pallets:0};cur.pn.add(String(x.row?.material||x.material||'').toUpperCase());cur.pieces+=+(x.qty??x.quantity??0)||0;cur.pallets+=+x.pallets||0;m.set(supplier,cur)});return [...m.values()].map(x=>({...x,pnCount:x.pn.size})).sort((a,b)=>b.pallets-a.pallets||b.pieces-a.pieces)}
 function renderSupplierPlanSummary(lines){let el=document.getElementById('supplierPlanSummary');if(!el)return;let arr=supplierSummaryFromLines(lines),totalP=arr.reduce((a,x)=>a+x.pallets,0),totalQ=arr.reduce((a,x)=>a+x.pieces,0);if(!arr.length){el.innerHTML='<div class=\"smalltxt\">Sem fornecedores no planejamento atual.</div>';return}el.innerHTML=arr.map(x=>`<div class=\"supplier-card\"><div class=\"supplier-title\">${esc(x.supplier)}</div><div class=\"supplier-metrics\"><span><b>${fmt(x.pnCount)}</b> PN</span><span><b>${fmt(x.pieces)}</b> peças</span><span><b>${fmt(x.pallets)}</b> pallets</span></div><div class=\"smalltxt\">Participação: ${pct(totalP?x.pallets/totalP:0)} dos pallets • ${pct(totalQ?x.pieces/totalQ:0)} das peças</div></div>`).join('')}
 
-function renderPlanning(){let t=totals(),lf=db.lastPlanningImport;planMeta.textContent=`${db.plan.length} linhas • ${fmt(t.pieces)} peças • ${fmt(t.pallets)} pallets${lf?.file?' • Arquivo: '+lf.file:''}`;planRows.innerHTML=t.lines.map(x=>`<tr><td><b>${esc(x.pk?.supplier||'SEM FORNECEDOR')}</b></td><td>${esc(x.row.material)}</td><td>${esc(x.pk?.description||x.row.description||'')}</td><td class="num">${fmt(x.row.planned)}</td><td class="num">${fmt(x.row.firmed)}</td><td class="num">${fmt(x.qty)}</td><td class="num">${fmt(x.ipp)}</td><td class="num">${fmt(x.pallets)}</td><td><span class="badge ${x.status==='OK'?'ok':'bad'}">${x.status}</span></td></tr>`).join('');renderSupplierPlanSummary(t.lines)}
+function renderPlanning(){let t=totals(),lf=db.lastPlanningImport,packs=packIndex();if(db.manualPlanActive&&db.processedScenario?.length){let lines=db.processedScenario.map((r,i)=>{let pk=packs[String(r.material||'').trim().toUpperCase()],ipp=pk?+pk.itemsPerPallet||0:0,pallets=ipp?Math.ceil(r.qty/ipp):0;return{row:{material:r.material,description:r.description,planned:r.planned,firmed:r.firmed},pk,qty:r.qty,ipp,pallets,status:pk&&ipp?'OK':'SEM EMBALAGEM',dates:r.dates,index:i}});planMeta.textContent=`CENÁRIO REPROCESSADO • ${lines.length} materiais • ${fmt(lines.reduce((a,x)=>a+x.qty,0))} peças • ${fmt(t.pallets)} pallets${lf?.file?' • Base: '+lf.file:''}`;planRows.innerHTML=lines.map(x=>`<tr class="${x.dates?.length?'processed-plan-row':''}"><td><b>${esc(x.pk?.supplier||'SEM FORNECEDOR')}</b></td><td>${esc(x.row.material)}<div class="smalltxt">${(x.dates||[]).map(ptDate).join(' • ')}</div></td><td>${esc(x.pk?.description||x.row.description||'')}</td><td class="num">${fmt(x.row.planned)}</td><td class="num">${fmt(x.row.firmed)}</td><td class="num"><b>${fmt(x.qty)}</b></td><td class="num">${fmt(x.ipp)}</td><td class="num">${fmt(x.pallets)}</td><td><span class="badge ${x.status==='OK'?'ok':'bad'}">${x.status}</span></td></tr>`).join('');renderSupplierPlanSummary(lines);return}planMeta.textContent=`${db.plan.length} linhas • ${fmt(t.pieces)} peças • ${fmt(t.pallets)} pallets${lf?.file?' • Arquivo: '+lf.file:''}`;planRows.innerHTML=t.lines.map(x=>`<tr><td><b>${esc(x.pk?.supplier||'SEM FORNECEDOR')}</b></td><td>${esc(x.row.material)}</td><td>${esc(x.pk?.description||x.row.description||'')}</td><td class="num">${fmt(x.row.planned)}</td><td class="num">${fmt(x.row.firmed)}</td><td class="num">${fmt(x.qty)}</td><td class="num">${fmt(x.ipp)}</td><td class="num">${fmt(x.pallets)}</td><td><span class="badge ${x.status==='OK'?'ok':'bad'}">${x.status}</span></td></tr>`).join('');renderSupplierPlanSummary(t.lines)}
 
 let selectedReceiptIds=new Set();
 function updateBulkSelectionUI(){
@@ -108,14 +108,32 @@ function moveReceiptSelect(id,targetDate){
   let r=(db.dailyReceipts||[]).find(x=>x.receiptId===id);if(!r)return;
   r.assignedDate=targetDate;markManualDirty();renderReceivingWindows();
 }
+function buildProcessedScenario(){
+  ensureReceiptAssignments();
+  let mode=document.getElementById('windowReceiptMode')?.value||'current',packs=packIndex(),byMaterial=new Map();
+  (db.dailyReceipts||[]).forEach(r=>{
+    let qty=receivingQty(r,mode);if(!qty)return;
+    let key=String(r.material||'').trim().toUpperCase(),cur=byMaterial.get(key)||{material:r.material,description:r.description||'',planned:0,firmed:0,qty:0,dates:new Set()};
+    cur.planned+=+r.planned||0;cur.firmed+=+r.firmed||0;cur.qty+=qty;cur.dates.add(currentReceiptDate(r));byMaterial.set(key,cur);
+  });
+  return [...byMaterial.values()].map(x=>({...x,dates:[...x.dates].sort()}));
+}
 function reprocessManualPlan(){
   ensureReceiptAssignments();
-  if(!(db.dailyReceipts||[]).length){alert('Não há planejamento diário carregado.');return}
-  db.manualPlanActive=true;persist();
+  if(!(db.dailyReceipts||[]).length){alert('Não há planejamento diário carregado. Importe e processe um arquivo de planejamento primeiro.');return}
+  let beforeActive=db.manualPlanActive, before=beforeActive?totals():null;
+  let ws=receivingWindowsData();
+  if(!ws.length){alert('Não há janelas com quantidade para reprocessar. Verifique o modo Planned/Firmed e o período importado.');return}
+  db.processedScenario=buildProcessedScenario();
+  db.processedScenarioAt=new Date().toISOString();
+  db.processedScenarioMode=document.getElementById('windowReceiptMode')?.value||'current';
+  db.manualPlanActive=true;
+  persist();
+  let p=ws.reduce((a,w)=>a+w.pallets,0),v=ws.reduce((a,w)=>a+w.vehicles,0),c=movedReceiptCount();
   render();
-  let ws=receivingWindowsData(),v=ws.reduce((a,w)=>a+w.vehicles,0),p=ws.reduce((a,w)=>a+w.pallets,0);
   let el=document.getElementById('manualPlanStatus');
-  if(el){let c=movedReceiptCount();el.className='notice manual-plan-status okbox';el.innerHTML=`✓ Cenário manual reprocessado com <b>${fmt(c)} Part Number(s) movimentado(s)</b>. Resultado atual: <b>${fmt(p)} pallets</b> e <b>${fmt(v)} carreta(s)</b>. Os itens remanejados permanecem destacados até você usar <b>Resetar original</b>.`}
+  if(el){let when=new Date(db.processedScenarioAt).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});el.className='notice manual-plan-status okbox';el.innerHTML=`✓ <b>Cenário reprocessado às ${when}</b> • ${fmt(c)} PN movimentado(s) • <b>${fmt(p)} pallets</b> • <b>${fmt(v)} carreta(s)</b>. Dashboard, Planejamento, Carregamento 3D e Impactos estão usando esta distribuição.`}
+  alert(`Cenário reprocessado com sucesso.\n${c} Part Number(s) movimentado(s)\n${p} pallets\n${v} carreta(s)`);
 }
 function resetManualPlan(){
   ensureReceiptAssignments();
@@ -123,7 +141,7 @@ function resetManualPlan(){
   if(!confirm('Restaurar todos os Part Numbers para as datas originais da última importação?'))return;
   (db.dailyReceipts||[]).forEach(r=>r.assignedDate=r.originalDate||r.date);
   selectedReceiptIds.clear();
-  db.manualPlanActive=false;persist();render();
+  db.manualPlanActive=false;db.processedScenario=[];db.processedScenarioAt='';persist();render();
   let el=document.getElementById('manualPlanStatus');
   if(el){el.className='notice manual-plan-status';el.innerHTML='✓ Distribuição original restaurada. Nenhum Part Number permanece marcado como remanejado.'}
 }
@@ -510,14 +528,14 @@ function applyMapping(){
       agg.set(key,cur);
     });
     db.plan=[...agg.values()].filter(x=>x.planned||x.firmed);
-    db.dailyReceipts=[...daily.values()].sort((a,b)=>a.date.localeCompare(b.date)||String(a.material).localeCompare(String(b.material))).map((r,i)=>({...r,receiptId:`R${i}_${String(r.material).replace(/[^A-Za-z0-9]/g,'')}_${r.date}`,originalDate:r.date,assignedDate:r.date}));db.manualPlanActive=false;
+    db.dailyReceipts=[...daily.values()].sort((a,b)=>a.date.localeCompare(b.date)||String(a.material).localeCompare(String(b.material))).map((r,i)=>({...r,receiptId:`R${i}_${String(r.material).replace(/[^A-Za-z0-9]/g,'')}_${r.date}`,originalDate:r.date,assignedDate:r.date}));db.manualPlanActive=false;db.processedScenario=[];db.processedScenarioAt='';
     db.selectedPeriods={planned:{start:ps,end:pe,label:dateRangeLabel(ps,pe)},firmed:{start:fs,end:fe,label:dateRangeLabel(fs,fe)}};
     let labels=[db.selectedPeriods.planned.label,db.selectedPeriods.firmed.label].filter(Boolean);if(labels.length)db.config.weekLabel=[...new Set(labels)].join(' / ');
     finishPlanningImport(currentPlanningFileName);return;
   }
   let mm={};['material','description','planned','firmed'].forEach(k=>{let el=document.getElementById('map_'+k);mm[k]=el?el.value:''});
   if(!mm.material){alert('Mapeie a coluna Material.');return}
-  db.plan=currentRows.map(r=>({material:r[mm.material]||'',description:mm.description?r[mm.description]||'':'',planned:mm.planned?num(r[mm.planned]):0,firmed:mm.firmed?num(r[mm.firmed]):0})).filter(x=>x.material);db.dailyReceipts=[];db.manualPlanActive=false;
+  db.plan=currentRows.map(r=>({material:r[mm.material]||'',description:mm.description?r[mm.description]||'':'',planned:mm.planned?num(r[mm.planned]):0,firmed:mm.firmed?num(r[mm.firmed]):0})).filter(x=>x.material);db.dailyReceipts=[];db.manualPlanActive=false;db.processedScenario=[];db.processedScenarioAt='';
   finishPlanningImport(currentPlanningFileName);
 }
 function closeMapModal(){mapModal.classList.remove('show')}function reprocessPlan(){render()}function loadDemoPlan(){db.plan=clone(window.DEMO_PLAN||[]);persist();render()}
