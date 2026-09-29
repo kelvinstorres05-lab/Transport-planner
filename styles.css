@@ -36,9 +36,5 @@
 .selected-receipt{outline:2px solid #4e8fc4;outline-offset:-2px;background:#eaf5ff!important}.selected-receipt.moved-receipt{background:#fff2bf!important}
 @media(max-width:900px){.bulk-move-bar{align-items:flex-start;flex-direction:column}.bulk-actions{width:100%}.bulk-actions select{flex:1}}
 
-.window-select-all{display:flex;align-items:center;gap:7px;margin-left:auto;padding:5px 8px;border-radius:8px;background:#f2f7fb;border:1px solid #d7e3ed;font-size:11px;font-weight:700;cursor:pointer}
-.window-select-all:hover{background:#e9f3fb}
-.window-select-all input{width:15px;height:15px;pointer-events:none}
-.window-bulk-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:9px 12px;margin:8px 12px;background:#f7fafc;border:1px solid #e0e8ef;border-radius:9px}
-.window-bulk-actions select{min-width:220px}
-@media(max-width:900px){.window-bulk-actions select{width:100%}}
+.window-select-btn{margin-left:auto;white-space:nowrap}
+.rw-summary{align-items:center;flex-wrap:wrap}
