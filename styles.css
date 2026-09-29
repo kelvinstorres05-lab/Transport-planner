@@ -44,3 +44,8 @@
 .firmed-mode-help{margin:10px 0;background:#eef7ff;border:1px solid #bcd9ee;color:#244e6d}
 
 .piece-composition{margin-top:3px;font-size:10px;font-weight:700;color:#8a6500;white-space:nowrap}
+
+.operational-reading{margin:10px 0;background:#f4f8fc;border:1px solid #cbdce9;color:#294b65}
+.firmed-op{background:#dff0d4!important;color:#365d1d!important;font-weight:800}
+.planned-op{background:#e6eef8!important;color:#35516f!important;font-weight:800}
+.composition-cell{font-size:11px;font-weight:800;color:#58636f;white-space:nowrap}
