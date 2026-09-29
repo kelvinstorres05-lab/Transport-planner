@@ -585,6 +585,19 @@ function applyMapping(){
   finishPlanningImport(currentPlanningFileName);
 }
 function closeMapModal(){mapModal.classList.remove('show')}function reprocessPlan(){render()}function loadDemoPlan(){db.plan=clone(window.DEMO_PLAN||[]);persist();render()}
-function autoMap(cols){let defs={material:['material','item','part','codigo','número','numero'],description:['desc','descrição','descricao'],planned:['planned receipts','planned'],firmed:['firmed receipts','firmed'],supplier:['fornecedor','supplier'],itemsPerBox:['itens por caixa','items/box','parts/hu','pecas caixa','peças caixa'],boxesPerPallet:['caixas por pallet','box pallet','hu/pallet'],itemsPerPallet:['itens por pallet','total itens pallet','lote','parts/pallet']},o={};Object.keys(defs).forEach(k=>o[k]=cols.find(c=>defs[k].some(t=>String(c).toLowerCase().includes(t)))||cols[0]);return o}function num(v){if(typeof v==='number')return v;return +String(v||0).replace(/\s/g,'').replace(/\./g,'').replace(',','.')||0}function readWorkbook(file,cb){let r=new FileReader();r.onload=e=>{let wb=XLSX.read(e.target.result,{type:'array'}),ws=wb.Sheets[wb.SheetNames[0]];cb(XLSX.utils.sheet_to_json(ws,{defval:''}))};r.readAsArrayBuffer(file)}
+function autoMap(cols){let defs={material:['material','item','part','codigo','número','numero'],description:['desc','descrição','descricao'],planned:['planned receipts','planned'],firmed:['firmed receipts','firmed'],supplier:['fornecedor','supplier'],itemsPerBox:['itens por caixa','items/box','parts/hu','pecas caixa','peças caixa'],boxesPerPallet:['caixas por pallet','box pallet','hu/pallet'],itemsPerPallet:['itens por pallet','total itens pallet','lote','parts/pallet']},o={};Object.keys(defs).forEach(k=>o[k]=cols.find(c=>defs[k].some(t=>String(c).toLowerCase().includes(t)))||cols[0]);return o}function num(v){
+  if(typeof v==='number')return Number.isFinite(v)?v:0;
+  let s=String(v??'').trim().replace(/\s/g,'');
+  if(!s)return 0;
+  // SheetJS/SAP pode devolver inteiros como "2,250" / "1,680" (vírgula = milhar).
+  // Também preservamos suporte a pt-BR: "2.250" e "2.250,50".
+  if(/^-?\d{1,3}(,\d{3})+$/.test(s))return Number(s.replace(/,/g,''));
+  if(/^-?\d{1,3}(\.\d{3})+,\d+$/.test(s))return Number(s.replace(/\./g,'').replace(',','.'));
+  if(/^-?\d{1,3}(\.\d{3})+$/.test(s))return Number(s.replace(/\./g,''));
+  if(/^-?\d+,\d+$/.test(s))return Number(s.replace(',','.'));
+  if(/^-?\d{1,3}(,\d{3})+\.\d+$/.test(s))return Number(s.replace(/,/g,''));
+  let n=Number(s);
+  return Number.isFinite(n)?n:0;
+}function readWorkbook(file,cb){let r=new FileReader();r.onload=e=>{let wb=XLSX.read(e.target.result,{type:'array'}),ws=wb.Sheets[wb.SheetNames[0]];cb(XLSX.utils.sheet_to_json(ws,{defval:''}))};r.readAsArrayBuffer(file)}
 function exportBackup(){let b=new Blob([JSON.stringify(db,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='wk_transport_backup.json';a.click()}function exportProcessed(){let t=totals(),rows=t.lines.map(x=>({Material:x.row.material,Descricao:x.pk?.description||x.row.description,Planned:x.row.planned,Firmed:x.row.firmed,Quantidade:x.qty,ItensPallet:x.ipp,Pallets:x.pallets,Status:x.status})),ws=XLSX.utils.json_to_sheet(rows),wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Resultado');XLSX.writeFile(wb,'WK_resultado_planejamento.xlsx')}function resetAll(){if(confirm('Restaurar dados iniciais?')){db=clone(DEFAULT);persist();render()}}
 function render(){renderDashboard();renderPlanning();renderReceivingWindows();renderWeeklyHistory();renderPackaging();renderConfig();renderImpacts();renderLoadSelectors()}render();
