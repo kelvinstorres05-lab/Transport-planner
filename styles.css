@@ -40,3 +40,5 @@
 .rw-summary{align-items:center;flex-wrap:wrap}
 
 .import-status{margin-top:12px}.import-status.okbox{font-weight:600}
+
+.firmed-mode-help{margin:10px 0;background:#eef7ff;border:1px solid #bcd9ee;color:#244e6d}

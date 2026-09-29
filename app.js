@@ -1,7 +1,7 @@
 const KEY='wk-transport-planner-v3';
-const DEFAULT={config:{capacity:52,minOcc:85,maxOcc:100,cost:1797.34,distance:68.8,ttw:0.78471,wtt:0.18538,windows:2,periodWeeks:18,beforePerWeek:3,weekLabel:'S34–S51',routeName:'TR1870FT67 - Nichibras/Hober > Forvia Goiana'},packaging:window.INIT_PACKAGING||[],plan:window.DEMO_PLAN||[],dailyReceipts:[],manualPlanActive:false,weeklyHistory:[],history:[]};
+const DEFAULT={config:{capacity:52,minOcc:85,maxOcc:100,cost:1797.34,distance:68.8,ttw:0.78471,wtt:0.18538,windows:2,periodWeeks:18,beforePerWeek:3,weekLabel:'S34–S51',routeName:'TR1870FT67 - Nichibras/Hober > Forvia Goiana'},packaging:window.INIT_PACKAGING||[],plan:window.DEMO_PLAN||[],dailyReceipts:[],manualPlanActive:false,manualReceiptMode:'current',weeklyHistory:[],history:[]};
 let db=loadDB();let currentBook=null,currentRows=[],mapping={},currentPlanningFileName='';let editingPack=-1;let angle=-36,drag=false,lastX=0,lastY=0;
-function clone(x){return JSON.parse(JSON.stringify(x))}function loadDB(){try{let x=JSON.parse(localStorage.getItem(KEY));if(x){if(!x.dailyReceipts)x.dailyReceipts=[];if(typeof x.manualPlanActive==='undefined')x.manualPlanActive=false;if(!x.weeklyHistory)x.weeklyHistory=[];if(!x.config.routeName)x.config.routeName='TR1870FT67 - Nichibras/Hober > Forvia Goiana';return x}return clone(DEFAULT)}catch(e){return clone(DEFAULT)}}function persist(){localStorage.setItem(KEY,JSON.stringify(db))}
+function clone(x){return JSON.parse(JSON.stringify(x))}function loadDB(){try{let x=JSON.parse(localStorage.getItem(KEY));if(x){if(!x.dailyReceipts)x.dailyReceipts=[];if(typeof x.manualPlanActive==='undefined')x.manualPlanActive=false;if(!x.manualReceiptMode)x.manualReceiptMode='current';if(!x.weeklyHistory)x.weeklyHistory=[];if(!x.config.routeName)x.config.routeName='TR1870FT67 - Nichibras/Hober > Forvia Goiana';return x}return clone(DEFAULT)}catch(e){return clone(DEFAULT)}}function persist(){localStorage.setItem(KEY,JSON.stringify(db))}
 function fmt(v,d=0){return Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d})}function money(v){return Number(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}function pct(v){return fmt(v*100,1)+'%'}function esc(s){return String(s??'').replace(/[&<>\"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[m]))}
 const titles={dashboard:['Dashboard executivo','Visão consolidada da necessidade de transporte WK'],loading3d:['Carregamento 3D','Visualização prevista da ocupação por janela e veículo'],planning:['Planejamento semanal','Importe Planned Receipts e Firmed Receipts'],receivingWindows:['Janelas de Recebimento','Detalhamento diário por data e Part Number'],weeklyHistory:['Histórico Semanal','Comparativo de capacidade, carretas, ocupação, saving e CO₂'],packaging:['Base de Embalagens','Cadastro editável de materiais e lotes'],impacts:['Impactos da otimização','Saving, viagens e CO₂ evitado'],config:['Configurações','Parâmetros operacionais do cálculo']};
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.getElementById(b.dataset.page).classList.add('active');pageTitle.textContent=titles[b.dataset.page][0];pageSub.textContent=titles[b.dataset.page][1];render()});
@@ -127,7 +127,7 @@ function reprocessManualPlan(){
   db.processedScenario=buildProcessedScenario();
   db.processedScenarioAt=new Date().toISOString();
   db.processedScenarioMode=document.getElementById('windowReceiptMode')?.value||'current';
-  db.manualPlanActive=true;
+  db.manualPlanActive=true;db.manualReceiptMode=document.getElementById('windowReceiptMode')?.value||'current';
   persist();
   let p=ws.reduce((a,w)=>a+w.pallets,0),v=ws.reduce((a,w)=>a+w.vehicles,0),c=movedReceiptCount();
   render();
@@ -146,7 +146,20 @@ function resetManualPlan(){
   if(el){el.className='notice manual-plan-status';el.innerHTML='✓ Distribuição original restaurada. Nenhum Part Number permanece marcado como remanejado.'}
 }
 
-function receivingQty(r,mode){if(mode==='current')mode=document.getElementById('qtyMode')?.value||'sum';let p=+r.planned||0,f=+r.firmed||0;if(mode==='firmed')return f>0?f:p;if(mode==='planned')return p;if(mode==='max')return Math.max(p,f);return p+f}
+function receivingQty(r,mode){
+  let planned=+r.planned||0,firmed=+r.firmed||0;
+  if(mode==='firmedOnly')return firmed>0?firmed:0;
+  if(mode==='firmed')return firmed>0?firmed:planned;
+  if(mode==='planned')return planned;
+  if(mode==='sum')return planned+firmed;
+  if(mode==='max')return Math.max(planned,firmed);
+  let pm=db.config.planMode||'max';
+  if(pm==='firmedOnly')return firmed>0?firmed:0;
+  if(pm==='firmed')return firmed>0?firmed:planned;
+  if(pm==='planned')return planned;
+  if(pm==='sum')return planned+firmed;
+  return Math.max(planned,firmed);
+}
 function receivingWindowsData(){ensureReceiptAssignments();let mode=document.getElementById('windowReceiptMode')?.value||'current',packs=packIndex(),map=new Map();(db.dailyReceipts||[]).forEach(r=>{let qty=receivingQty(r,mode);if(!qty)return;let date=currentReceiptDate(r),pk=packs[String(r.material||'').trim().toUpperCase()],ipp=pk?+pk.itemsPerPallet||0:0,pallets=ipp?Math.ceil(qty/ipp):0;let w=map.get(date)||{date,items:[],pieces:0,pallets:0};w.items.push({...r,date,qty,pk,ipp,pallets,supplier:pk?.supplier||'SEM FORNECEDOR',status:pk&&ipp?'OK':'SEM EMBALAGEM'});w.pieces+=qty;w.pallets+=pallets;map.set(date,w)});return [...map.values()].sort((a,b)=>a.date.localeCompare(b.date)).map((w,i)=>{let vehicles=w.pallets?Math.ceil(w.pallets/db.config.capacity):0,occ=vehicles?w.pallets/(vehicles*db.config.capacity):0,st=occStatus(occ);return {...w,window:i+1,vehicles,occ,status:st[0],statusClass:st[1]}})}
 function supplierGroupsForWindow(w){let m=new Map();w.items.forEach(r=>{let supplier=String(r.supplier||r.pk?.supplier||'SEM FORNECEDOR').trim()||'SEM FORNECEDOR',g=m.get(supplier)||{supplier,pn:new Set(),pieces:0,pallets:0,items:[]};g.pn.add(String(r.material).toUpperCase());g.pieces+=+r.qty||0;g.pallets+=+r.pallets||0;g.items.push(r);m.set(supplier,g)});return [...m.values()].map(g=>({...g,pnCount:g.pn.size})).sort((a,b)=>b.pallets-a.pallets||b.pieces-a.pieces)}
 function supplierDecisionCard(g,w){let remaining=Math.max(0,w.pallets-g.pallets),newVehicles=remaining?Math.ceil(remaining/db.config.capacity):0,newOcc=newVehicles?remaining/(newVehicles*db.config.capacity):0,vehDelta=newVehicles-w.vehicles,decision=vehDelta<0?`Reduz ${Math.abs(vehDelta)} carreta(s)`:vehDelta>0?`Aumenta ${vehDelta} carreta(s)`:'Não altera nº de carretas';return `<details class=\"supplier-load\"><summary><div><b>${esc(g.supplier)}</b><div class=\"smalltxt\">${fmt(g.pnCount)} PN • ${fmt(g.pieces)} peças • ${fmt(g.pallets)} pallets • ${pct(w.pallets?g.pallets/w.pallets:0)} da janela</div></div><span class=\"badge ${vehDelta<0?'ok':'warn'}\">${decision}</span></summary><div class=\"supplier-load-body\"><div class=\"decision-strip\"><span>Se retirar/remanejar: <b>-${fmt(g.pallets)} pallets</b></span><span>Restam: <b>${fmt(remaining)} pallets</b></span><span>Carretas: <b>${fmt(w.vehicles)} → ${fmt(newVehicles)}</b></span><span>Nova ocupação: <b>${pct(newOcc)}</b></span><span>Saving potencial: <b>${money((w.vehicles-newVehicles)*db.config.cost)}</b></span></div><div class=\"table-wrap\"><table><thead><tr><th>Part Number</th><th>Descrição</th><th>Qtd.</th><th>Pallets</th></tr></thead><tbody>${g.items.map(r=>`<tr><td><b>${esc(r.material)}</b></td><td>${esc(r.pk?.description||r.description||'')}</td><td class=\"num\">${fmt(r.qty)}</td><td class=\"num\">${r.status==='OK'?fmt(r.pallets):'—'}</td></tr>`).join('')}</tbody></table></div></div></details>`}
