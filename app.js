@@ -176,8 +176,11 @@ function supplierDecisionCard(g,w){let remaining=Math.max(0,w.pallets-g.pallets)
 
 
 function deliveryCountForReceipt(r){
-  let explicit=+(r.deliveryCount||r.deliveries||0);
-  return explicit>0?explicit:1;
+  let firmed=+r.firmedDeliveryCount||0,explicit=+(r.deliveryCount||r.deliveries||0),planned=+r.plannedDeliveryCount||0;
+  if((+r.firmed||0)>0 && firmed>0)return firmed;
+  if(explicit>0)return explicit;
+  if(planned>0)return planned;
+  return 1;
 }
 function operationalStatus(r){return (+r.firmed||0)>0?'FIRMED':((+r.planned||0)>0?'PLANNED':'—')}
 function operationalOccurrences(r){
@@ -566,15 +569,15 @@ function applyMapping(){
     currentRows.forEach(r=>{
       let mat=String(r[material]||'').trim();if(!mat)return;
       let typ=String(r[typeCol]||'').trim().toLowerCase(),isP=typ.includes('planned receipt'),isF=typ.includes('firmed receipt');if(!isP&&!isF)return;
-      let desc=description?String(r[description]||''):'',key=mat.toUpperCase(),cur=agg.get(key)||{material:mat,description:desc,planned:0,firmed:0};
-      imp.dateCols.forEach(dc=>{let inP=isP&&psDate&&peDate&&dc.date>=psDate&&dc.date<=peDate,inF=isF&&fsDate&&feDate&&dc.date>=fsDate&&dc.date<=feDate;if(!inP&&!inF)return;let q=num(r[dc.col]);if(!q)return;let ds=isoDate(dc.date),dk=key+'|'+ds,day=daily.get(dk)||{material:mat,description:desc,date:ds,planned:0,firmed:0};if(inP){day.planned+=q;cur.planned+=q}if(inF){day.firmed+=q;cur.firmed+=q}daily.set(dk,day)});
+      let desc=description?String(r[description]||''):'',key=mat.toUpperCase(),cur=agg.get(key)||{material:mat,description:desc,planned:0,firmed:0,firmedDeliveryCount:0,plannedDeliveryCount:0};
+      imp.dateCols.forEach(dc=>{let inP=isP&&psDate&&peDate&&dc.date>=psDate&&dc.date<=peDate,inF=isF&&fsDate&&feDate&&dc.date>=fsDate&&dc.date<=feDate;if(!inP&&!inF)return;let q=num(r[dc.col]);if(!q)return;let ds=isoDate(dc.date),dk=key+'|'+ds,day=daily.get(dk)||{material:mat,description:desc,date:ds,planned:0,firmed:0};if(inP){day.planned+=q;cur.planned+=q;cur.plannedDeliveryCount+=1}if(inF){day.firmed+=q;cur.firmed+=q;cur.firmedDeliveryCount+=1}daily.set(dk,day)});
       agg.set(key,cur);
     });
     db.plan=[...agg.values()].filter(x=>x.planned||x.firmed);
-    db.dailyReceipts=[...daily.values()].sort((a,b)=>a.date.localeCompare(b.date)||String(a.material).localeCompare(String(b.material))).map((r,i)=>({...r,receiptId:`R${i}_${String(r.material).replace(/[^A-Za-z0-9]/g,'')}_${r.date}`,originalDate:r.date,assignedDate:r.date}));db.manualPlanActive=false;db.processedScenario=[];db.processedScenarioAt='';
+    db.dailyReceipts=[...daily.values()].sort((a,b)=>a.date.localeCompare(b.date)||String(a.material).localeCompare(String(b.material))).map((r,i)=>{let a=agg.get(String(r.material||'').trim().toUpperCase())||{};return {...r,firmedDeliveryCount:+a.firmedDeliveryCount||0,plannedDeliveryCount:+a.plannedDeliveryCount||0,deliveryCount:(+a.firmedDeliveryCount||+a.plannedDeliveryCount||1),receiptId:`R${i}_${String(r.material).replace(/[^A-Za-z0-9]/g,'')}_${r.date}`,originalDate:r.date,assignedDate:r.date}});db.manualPlanActive=false;db.processedScenario=[];db.processedScenarioAt='';
     db.selectedPeriods={planned:{start:ps,end:pe,label:dateRangeLabel(ps,pe)},firmed:{start:fs,end:fe,label:dateRangeLabel(fs,fe)}};
     let labels=[db.selectedPeriods.planned.label,db.selectedPeriods.firmed.label].filter(Boolean);if(labels.length)db.config.weekLabel=[...new Set(labels)].join(' / ');
-    finishPlanningImport(currentPlanningFileName);return;
+    db.importRuleVersion='firmed-pieces-delivery-dates-v2';finishPlanningImport(currentPlanningFileName);return;
   }
   let mm={};['material','description','planned','firmed'].forEach(k=>{let el=document.getElementById('map_'+k);mm[k]=el?el.value:''});
   if(!mm.material){alert('Mapeie a coluna Material.');return}
