@@ -34,7 +34,7 @@
     <select id="bulkMoveTarget"><option value="">Mover selecionados para...</option></select>
     <button class="btn primary small" onclick="moveSelectedReceipts()">Mover selecionados</button>
   </div>
-</div><div id="receiptModeHelp" class="notice firmed-mode-help"><b>Somente Firmed:</b> considera exclusivamente Part Numbers com Firmed. Quando o SAP retornar o Firmed como quantidade de manifestos (ex.: 2) e o lote cadastrado for 880 peças, o sistema converte automaticamente para <b>2 × 880 = 1.760 peças</b>. Linhas somente Planned ficam fora do cálculo.</div><div id="manualPlanStatus" class="notice manual-plan-status">Distribuição original carregada. Arraste Part Numbers entre as janelas e clique em <b>Reprocessar cenário</b>.</div><div id="receivingWindowCards"></div></div></section>
+</div><div id="receiptModeHelp" class="notice firmed-mode-help"><b>Somente Firmed:</b> considera exclusivamente Part Numbers com Firmed &gt; 0. <b>O valor Firmed do SAP é tratado como quantidade física de peças.</b> Ex.: Firmed 1.800 com 900 peças/pallet = 2 pallets (900 + 900).</div><div id="manualPlanStatus" class="notice manual-plan-status">Distribuição original carregada. Arraste Part Numbers entre as janelas e clique em <b>Reprocessar cenário</b>.</div><div id="receivingWindowCards"></div></div></section>
 <section class="page" id="weeklyHistory">
   <div class="grid kpis" id="historyKpis"></div>
 
