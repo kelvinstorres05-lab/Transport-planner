@@ -1,6 +1,6 @@
 const KEY='wk-transport-planner-v3';
 const DEFAULT={config:{capacity:52,minOcc:85,maxOcc:100,cost:1797.34,distance:68.8,ttw:0.78471,wtt:0.18538,windows:2,periodWeeks:18,beforePerWeek:3,weekLabel:'S34–S51',routeName:'TR1870FT67 - Nichibras/Hober > Forvia Goiana'},packaging:window.INIT_PACKAGING||[],plan:window.DEMO_PLAN||[],dailyReceipts:[],manualPlanActive:false,weeklyHistory:[],history:[]};
-let db=loadDB();let currentBook=null,currentRows=[],mapping={};let editingPack=-1;let angle=-36,drag=false,lastX=0,lastY=0;
+let db=loadDB();let currentBook=null,currentRows=[],mapping={},currentPlanningFileName='';let editingPack=-1;let angle=-36,drag=false,lastX=0,lastY=0;
 function clone(x){return JSON.parse(JSON.stringify(x))}function loadDB(){try{let x=JSON.parse(localStorage.getItem(KEY));if(x){if(!x.dailyReceipts)x.dailyReceipts=[];if(typeof x.manualPlanActive==='undefined')x.manualPlanActive=false;if(!x.weeklyHistory)x.weeklyHistory=[];if(!x.config.routeName)x.config.routeName='TR1870FT67 - Nichibras/Hober > Forvia Goiana';return x}return clone(DEFAULT)}catch(e){return clone(DEFAULT)}}function persist(){localStorage.setItem(KEY,JSON.stringify(db))}
 function fmt(v,d=0){return Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d})}function money(v){return Number(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}function pct(v){return fmt(v*100,1)+'%'}function esc(s){return String(s??'').replace(/[&<>\"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[m]))}
 const titles={dashboard:['Dashboard executivo','Visão consolidada da necessidade de transporte WK'],loading3d:['Carregamento 3D','Visualização prevista da ocupação por janela e veículo'],planning:['Planejamento semanal','Importe Planned Receipts e Firmed Receipts'],receivingWindows:['Janelas de Recebimento','Detalhamento diário por data e Part Number'],weeklyHistory:['Histórico Semanal','Comparativo de capacidade, carretas, ocupação, saving e CO₂'],packaging:['Base de Embalagens','Cadastro editável de materiais e lotes'],impacts:['Impactos da otimização','Saving, viagens e CO₂ evitado'],config:['Configurações','Parâmetros operacionais do cálculo']};
@@ -17,7 +17,7 @@ function supplierNameForLine(line){return String(line.pk?.supplier||line.pack?.s
 function supplierSummaryFromLines(lines){let m=new Map();lines.forEach(x=>{let supplier=supplierNameForLine(x),cur=m.get(supplier)||{supplier,pn:new Set(),pieces:0,pallets:0};cur.pn.add(String(x.row?.material||x.material||'').toUpperCase());cur.pieces+=+(x.qty??x.quantity??0)||0;cur.pallets+=+x.pallets||0;m.set(supplier,cur)});return [...m.values()].map(x=>({...x,pnCount:x.pn.size})).sort((a,b)=>b.pallets-a.pallets||b.pieces-a.pieces)}
 function renderSupplierPlanSummary(lines){let el=document.getElementById('supplierPlanSummary');if(!el)return;let arr=supplierSummaryFromLines(lines),totalP=arr.reduce((a,x)=>a+x.pallets,0),totalQ=arr.reduce((a,x)=>a+x.pieces,0);if(!arr.length){el.innerHTML='<div class=\"smalltxt\">Sem fornecedores no planejamento atual.</div>';return}el.innerHTML=arr.map(x=>`<div class=\"supplier-card\"><div class=\"supplier-title\">${esc(x.supplier)}</div><div class=\"supplier-metrics\"><span><b>${fmt(x.pnCount)}</b> PN</span><span><b>${fmt(x.pieces)}</b> peças</span><span><b>${fmt(x.pallets)}</b> pallets</span></div><div class=\"smalltxt\">Participação: ${pct(totalP?x.pallets/totalP:0)} dos pallets • ${pct(totalQ?x.pieces/totalQ:0)} das peças</div></div>`).join('')}
 
-function renderPlanning(){let t=totals();planMeta.textContent=`${db.plan.length} linhas • ${fmt(t.pieces)} peças • ${fmt(t.pallets)} pallets`;planRows.innerHTML=t.lines.map(x=>`<tr><td><b>${esc(x.pk?.supplier||'SEM FORNECEDOR')}</b></td><td>${esc(x.row.material)}</td><td>${esc(x.pk?.description||x.row.description||'')}</td><td class="num">${fmt(x.row.planned)}</td><td class="num">${fmt(x.row.firmed)}</td><td class="num">${fmt(x.qty)}</td><td class="num">${fmt(x.ipp)}</td><td class="num">${fmt(x.pallets)}</td><td><span class="badge ${x.status==='OK'?'ok':'bad'}">${x.status}</span></td></tr>`).join('');renderSupplierPlanSummary(t.lines)}
+function renderPlanning(){let t=totals(),lf=db.lastPlanningImport;planMeta.textContent=`${db.plan.length} linhas • ${fmt(t.pieces)} peças • ${fmt(t.pallets)} pallets${lf?.file?' • Arquivo: '+lf.file:''}`;planRows.innerHTML=t.lines.map(x=>`<tr><td><b>${esc(x.pk?.supplier||'SEM FORNECEDOR')}</b></td><td>${esc(x.row.material)}</td><td>${esc(x.pk?.description||x.row.description||'')}</td><td class="num">${fmt(x.row.planned)}</td><td class="num">${fmt(x.row.firmed)}</td><td class="num">${fmt(x.qty)}</td><td class="num">${fmt(x.ipp)}</td><td class="num">${fmt(x.pallets)}</td><td><span class="badge ${x.status==='OK'?'ok':'bad'}">${x.status}</span></td></tr>`).join('');renderSupplierPlanSummary(t.lines)}
 
 let selectedReceiptIds=new Set();
 function updateBulkSelectionUI(){
@@ -401,7 +401,33 @@ function exportProcessedByDate(){
 }
 
 function importPackaging(e){readWorkbook(e.target.files[0],rows=>{let cols=Object.keys(rows[0]||{}),m=autoMap(cols);db.packaging=rows.map(r=>({supplier:r[m.supplier]||'',supplierCode:'',material:r[m.material]||'',description:r[m.description]||'',itemsPerBox:num(r[m.itemsPerBox]),boxesPerPallet:num(r[m.boxesPerPallet]),itemsPerPallet:num(r[m.itemsPerPallet])||num(r[m.itemsPerBox])*num(r[m.boxesPerPallet]),unit:'PC'})).filter(x=>x.material);persist();render()})}
-function readPlanningFile(e){let f=e.target.files[0];if(!f)return;let reader=new FileReader();reader.onload=x=>{currentBook=XLSX.read(x.target.result,{type:'array',cellDates:true});sheetSelect.innerHTML=currentBook.SheetNames.map(n=>`<option>${n}</option>`).join('');changePlanSheet();mapModal.classList.add('show')};reader.readAsArrayBuffer(f)}
+function readPlanningFile(e){
+  let input=e.target,f=input.files&&input.files[0];
+  if(!f)return;
+  currentPlanningFileName=f.name||'arquivo selecionado';
+  let status=document.getElementById('planningImportStatus');
+  if(status){status.className='notice import-status';status.innerHTML=`Arquivo selecionado: <b>${esc(currentPlanningFileName)}</b> • lendo arquivo...`}
+  let reader=new FileReader();
+  reader.onerror=()=>{if(status){status.className='notice warnbox import-status';status.textContent='Não foi possível ler o arquivo selecionado.'} input.value=''};
+  reader.onload=x=>{
+    try{
+      currentBook=XLSX.read(x.target.result,{type:'array',cellDates:true});
+      if(!currentBook.SheetNames||!currentBook.SheetNames.length)throw new Error('Arquivo sem abas');
+      sheetSelect.innerHTML=currentBook.SheetNames.map(n=>`<option>${esc(n)}</option>`).join('');
+      changePlanSheet();
+      mapModal.classList.add('show');
+      if(status){status.className='notice import-status';status.innerHTML=`Arquivo carregado: <b>${esc(currentPlanningFileName)}</b>. Confirme o mapeamento e clique em <b>Processar planejamento</b>.`}
+    }catch(err){
+      console.error(err);
+      if(status){status.className='notice warnbox import-status';status.innerHTML=`Falha ao abrir <b>${esc(currentPlanningFileName)}</b>. Verifique se o arquivo é XLSX, XLS ou CSV válido.`}
+      alert('Não foi possível abrir o arquivo de planejamento.');
+    }finally{
+      // Permite selecionar novamente o mesmo arquivo e disparar onchange.
+      input.value='';
+    }
+  };
+  reader.readAsArrayBuffer(f);
+}
 function parseDateHeader(v){
   if(v instanceof Date&&!isNaN(v))return new Date(v.getFullYear(),v.getMonth(),v.getDate());
   let s=String(v||'').trim(),m=s.match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})$/);
@@ -444,6 +470,27 @@ function updatePeriodInfo(){
   if(pi)pi.textContent=ps&&pe?`Período selecionado: ${new Date(ps+'T00:00:00').toLocaleDateString('pt-BR')} a ${new Date(pe+'T00:00:00').toLocaleDateString('pt-BR')} • ${dateRangeLabel(ps,pe)}`:'Selecione o período.';
   if(fi)fi.textContent=fs&&fe?`Período selecionado: ${new Date(fs+'T00:00:00').toLocaleDateString('pt-BR')} a ${new Date(fe+'T00:00:00').toLocaleDateString('pt-BR')} • ${dateRangeLabel(fs,fe)}`:'Selecione o período.';
 }
+function finishPlanningImport(fileName){
+  selectedReceiptIds.clear();
+  db.manualPlanActive=false;
+  db.lastPlanningImport={
+    file:fileName||currentPlanningFileName||'arquivo',
+    at:new Date().toISOString(),
+    rows:(db.plan||[]).length,
+    daily:(db.dailyReceipts||[]).length
+  };
+  persist();
+  closeMapModal();
+  render();
+  let status=document.getElementById('planningImportStatus');
+  if(status){
+    let when=new Date(db.lastPlanningImport.at).toLocaleString('pt-BR');
+    status.className='notice okbox import-status';
+    status.innerHTML=`✓ Planejamento atualizado com <b>${esc(db.lastPlanningImport.file)}</b> • ${fmt(db.lastPlanningImport.rows)} materiais • ${fmt(db.lastPlanningImport.daily)} registros por data • ${when}`;
+  }
+  alert(`Planejamento atualizado com sucesso.\nArquivo: ${db.lastPlanningImport.file}\nMateriais: ${db.lastPlanningImport.rows}\nRegistros por data: ${db.lastPlanningImport.daily}`);
+}
+
 function applyMapping(){
   let imp=window.__planningImport||{};
   if(imp.sapMode){
@@ -466,12 +513,12 @@ function applyMapping(){
     db.dailyReceipts=[...daily.values()].sort((a,b)=>a.date.localeCompare(b.date)||String(a.material).localeCompare(String(b.material))).map((r,i)=>({...r,receiptId:`R${i}_${String(r.material).replace(/[^A-Za-z0-9]/g,'')}_${r.date}`,originalDate:r.date,assignedDate:r.date}));db.manualPlanActive=false;
     db.selectedPeriods={planned:{start:ps,end:pe,label:dateRangeLabel(ps,pe)},firmed:{start:fs,end:fe,label:dateRangeLabel(fs,fe)}};
     let labels=[db.selectedPeriods.planned.label,db.selectedPeriods.firmed.label].filter(Boolean);if(labels.length)db.config.weekLabel=[...new Set(labels)].join(' / ');
-    persist();closeMapModal();render();return;
+    finishPlanningImport(currentPlanningFileName);return;
   }
   let mm={};['material','description','planned','firmed'].forEach(k=>{let el=document.getElementById('map_'+k);mm[k]=el?el.value:''});
   if(!mm.material){alert('Mapeie a coluna Material.');return}
   db.plan=currentRows.map(r=>({material:r[mm.material]||'',description:mm.description?r[mm.description]||'':'',planned:mm.planned?num(r[mm.planned]):0,firmed:mm.firmed?num(r[mm.firmed]):0})).filter(x=>x.material);db.dailyReceipts=[];db.manualPlanActive=false;
-  persist();closeMapModal();render();
+  finishPlanningImport(currentPlanningFileName);
 }
 function closeMapModal(){mapModal.classList.remove('show')}function reprocessPlan(){render()}function loadDemoPlan(){db.plan=clone(window.DEMO_PLAN||[]);persist();render()}
 function autoMap(cols){let defs={material:['material','item','part','codigo','número','numero'],description:['desc','descrição','descricao'],planned:['planned receipts','planned'],firmed:['firmed receipts','firmed'],supplier:['fornecedor','supplier'],itemsPerBox:['itens por caixa','items/box','parts/hu','pecas caixa','peças caixa'],boxesPerPallet:['caixas por pallet','box pallet','hu/pallet'],itemsPerPallet:['itens por pallet','total itens pallet','lote','parts/pallet']},o={};Object.keys(defs).forEach(k=>o[k]=cols.find(c=>defs[k].some(t=>String(c).toLowerCase().includes(t)))||cols[0]);return o}function num(v){if(typeof v==='number')return v;return +String(v||0).replace(/\s/g,'').replace(/\./g,'').replace(',','.')||0}function readWorkbook(file,cb){let r=new FileReader();r.onload=e=>{let wb=XLSX.read(e.target.result,{type:'array'}),ws=wb.Sheets[wb.SheetNames[0]];cb(XLSX.utils.sheet_to_json(ws,{defval:''}))};r.readAsArrayBuffer(file)}

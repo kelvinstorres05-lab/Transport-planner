@@ -38,3 +38,5 @@
 
 .window-select-btn{margin-left:auto;white-space:nowrap}
 .rw-summary{align-items:center;flex-wrap:wrap}
+
+.import-status{margin-top:12px}.import-status.okbox{font-weight:600}
