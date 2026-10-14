@@ -781,9 +781,25 @@ function saveSupplierSchedule(i){
  if(!Number.isInteger(windows)||windows<0||!Number.isInteger(vehicles)||vehicles<1||!Number.isFinite(capacity)||capacity<=0||!Number.isFinite(cost)||cost<0){alert('Informe números válidos para janelas e veículos.');return}
  db.supplierSchedules ||= {};
  db.supplierSchedules[supplierKey(name)]={days,windows,vehicles,capacity,cost};
- persist();renderSupplierSchedule();
+ persist();renderSupplierSchedule();renderWeeklySuppliers();
  document.getElementById('supplierScheduleStatus').textContent='Calendário salvo para '+name;
 }
+
+function saveAllSupplierSchedules(){
+ const names=window.__supplierNames||[];let count=0;
+ for(let i=0;i<names.length;i++){
+  const days=[...document.querySelectorAll(`.supday[data-i="${i}"]:checked`)].map(x=>Number(x.value));
+  const windows=Number(document.querySelector(`.supwindows[data-i="${i}"]`)?.value);
+  const vehicles=Number(document.querySelector(`.supvehicles[data-i="${i}"]`)?.value);
+  const capacity=Number(document.querySelector(`.supcapacity[data-i="${i}"]`)?.value);
+  const cost=Number(document.querySelector(`.supcost[data-i="${i}"]`)?.value);
+  if(!Number.isInteger(windows)||windows<0||!Number.isInteger(vehicles)||vehicles<1||capacity<=0||!Number.isFinite(cost)||cost<0){alert('Dados inválidos para '+names[i]);return}
+  db.supplierSchedules ||= {};db.supplierSchedules[supplierKey(names[i])]={days,windows,vehicles,capacity,cost};count++;
+ }
+ persist();renderSupplierSchedule();renderWeeklySuppliers();
+ document.getElementById('supplierScheduleStatus').textContent=count+' fornecedor(es) salvo(s) com sucesso.';
+}
+
 function exportSupplierSchedule(){
  const date=document.getElementById('supplierDemandDate')?.value||'';
  const data=supplierDemandForDate(date);
@@ -804,32 +820,33 @@ function weeklySupplierData(){
   const w=isoWeekYear(date);if(!w)return;
   supplierDemandForDate(date).forEach(g=>{
    const key=w.label+'|'+supplierKey(g.supplier),sc=scheduleFor(g.supplier);
-   const x=map.get(key)||{week:w.label,supplier:g.supplier,materials:new Set(),pieces:0,pallets:0,missing:0,dates:new Set(),calendar:sc};
-   g.materials.forEach(p=>x.materials.add(p));x.pieces+=g.pieces;x.pallets+=g.pallets;x.missing+=g.missing;x.dates.add(date);map.set(key,x);
+   const x=map.get(key)||{week:w.label,supplier:g.supplier,materials:new Set(),pieces:0,pallets:0,missing:0,dates:[],vehicles:0,windows:0,available:0,cost:0};
+   g.materials.forEach(p=>x.materials.add(p));x.pieces+=g.pieces;x.pallets+=g.pallets;x.missing+=g.missing;
+   // Vehicles cannot be shared across separate delivery dates.
+   x.vehicles+=g.vehicles;x.windows+=g.windows;x.available+=g.available;
+   x.cost+=g.vehicles*(Number(sc.cost??db.config.cost)||0);
+   x.dates.push({date,vehicles:g.vehicles,pallets:g.pallets,allowed:g.allowed,windows:g.windows,available:g.available});
+   map.set(key,x);
   });
  });
- return [...map.values()].map(x=>{
-  const sc=x.calendar,capacity=Math.max(1,Number(sc.capacity)||Number(db.config.capacity)||52);
-  const vehicles=Math.ceil(x.pallets/capacity),perWindow=Math.max(1,Number(sc.vehicles)||1);
-  const windows=Math.ceil(vehicles/perWindow);
-  // Available windows in the entire ISO week (not only on days with demand).
-  const [y,w]=x.week.split('-S').map(Number);
-  const jan4=new Date(y,0,4,12),monday=new Date(jan4);
-  monday.setDate(jan4.getDate()-((jan4.getDay()+6)%7)+(w-1)*7);
-  let allowedDays=0;for(let i=0;i<7;i++){let d=new Date(monday);d.setDate(monday.getDate()+i);if((sc.days||[]).includes(d.getDay()))allowedDays++}
-  const available=allowedDays*Math.max(0,Number(sc.windows)||0),cost=vehicles*(Number(sc.cost??db.config.cost)||0);
-  return {...x,vehicles,windows,available,cost,status:x.missing?'Embalagem pendente':windows>available?'Janelas insuficientes':'Capacidade disponível'};
- }).sort((a,b)=>a.week.localeCompare(b.week)||a.supplier.localeCompare(b.supplier,'pt-BR'));
+ return [...map.values()].map(x=>({...x,status:x.missing?'Embalagem pendente':x.dates.some(d=>!d.allowed)?'Dia não habilitado':x.dates.some(d=>d.windows>d.available)?'Janelas insuficientes':'Capacidade disponível'})).sort((a,b)=>a.week.localeCompare(b.week)||a.supplier.localeCompare(b.supplier,'pt-BR'));
 }
-function renderWeeklySuppliers(){
+function renderWeeklySuppliers(keepSelection){
  const tbody=document.getElementById('weeklySupplierRows');if(!tbody)return;
- const data=weeklySupplierData();
- document.getElementById('weeklySupplierKpis').innerHTML=`<b>${fmt(new Set(data.map(r=>r.week)).size)} semanas</b> • ${fmt(new Set(data.map(r=>r.supplier)).size)} fornecedores • <b>${fmt(data.reduce((a,r)=>a+r.vehicles,0))} veículos</b> • ${fmt(data.reduce((a,r)=>a+r.pallets,0))} pallets • ${money(data.reduce((a,r)=>a+r.cost,0))} estimados`;
- tbody.innerHTML=data.map(r=>`<tr><td>${esc(r.week)}</td><td>${esc(r.supplier)}</td><td>${fmt(r.materials.size)}</td><td>${fmt(r.pieces)}</td><td>${fmt(r.pallets)}</td><td><b>${fmt(r.vehicles)}</b></td><td>${fmt(r.windows)}</td><td>${fmt(r.available)}</td><td>${money(r.cost)}</td><td>${esc(r.status)}</td></tr>`).join('')||'<tr><td colspan="10">Importe um planejamento para visualizar o cenário semanal.</td></tr>';
+ const data=weeklySupplierData(),weeks=[...new Set(data.map(r=>r.week))];
+ const sel=document.getElementById('weeklySupplierWeek');
+ if(sel){const previous=sel.value;sel.innerHTML=weeks.map(w=>`<option value="${esc(w)}">${esc(w)}</option>`).join('');sel.value=weeks.includes(previous)?previous:(weeks.at(-1)||'');}
+ const filtered=data.filter(r=>!sel||r.week===sel.value);
+ const total=filtered.reduce((n,r)=>n+r.vehicles,0);
+ const kpis=document.getElementById('weeklySupplierKpis');
+ if(kpis)kpis.innerHTML=`<strong style="font-size:20px">${fmt(total)} veículos na semana</strong> <span style="margin-left:14px">${fmt(filtered.length)} fornecedores • ${fmt(filtered.reduce((n,r)=>n+r.pallets,0))} pallets • ${money(filtered.reduce((n,r)=>n+r.cost,0))} estimados</span>`;
+ tbody.innerHTML=filtered.map(r=>`<tr><td><b>${esc(r.supplier)}</b></td><td><b>${fmt(r.vehicles)}</b></td><td>${r.dates.map(d=>`${esc(d.date.split('-').reverse().join('/'))}: <b>${fmt(d.vehicles)} veículo(s)</b> (${fmt(d.pallets)} pallets)`).join('<br>')}</td><td>${fmt(r.pallets)}</td><td>${money(r.cost)}</td><td>${esc(r.status)}</td></tr>`).join('')||'<tr><td colspan="6">Sem planejamento nesta semana.</td></tr>';
+ const note=document.getElementById('weeklySupplierNote');if(note)note.textContent='Cálculo por fornecedor e data: veículos = arredondamento para cima de pallets ÷ capacidade. Não consolida veículos entre dias diferentes. Valores representam necessidade calculada, não viagens confirmadas.';
 }
 function exportWeeklySuppliers(){
- const rows=weeklySupplierData().map(r=>({Semana:r.week,Fornecedor:r.supplier,PN:r.materials.size,Peças:r.pieces,Pallets:r.pallets,Veículos:r.vehicles,'Janelas necessárias':r.windows,'Janelas disponíveis':r.available,'Custo estimado R$':r.cost,Status:r.status}));
- const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'Veiculos Semanais');XLSX.writeFile(wb,'WK_Veiculos_Semanais_Fornecedor.xlsx');
+ const week=document.getElementById('weeklySupplierWeek')?.value;
+ const rows=weeklySupplierData().filter(r=>!week||r.week===week).flatMap(r=>r.dates.map(d=>({Semana:r.week,Fornecedor:r.supplier,Data:d.date,Pallets:d.pallets,Veículos:d.vehicles,'Janelas necessárias':d.windows,'Janelas disponíveis':d.available,Status:r.status})));
+ const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'Veiculos por Dia');XLSX.writeFile(wb,'WK_Veiculos_Fornecedor_Dia.xlsx');
 }
 
 function openSupplierSettings(){document.querySelector('.nav button[data-page="supplierSchedule"]')?.click()}
@@ -840,4 +857,4 @@ function renderSupplierLinkDiagnostics(){
  const named=plan.filter(r=>{const p=idx[pnKey(r.material)];return p&&supplierName(p,r)!=='SEM FORNECEDOR'}).length;
  el.innerHTML=`<b>Diagnóstico de vínculo:</b> ${fmt(pack.length)} materiais na base de embalagens; ${fmt(plan.length)} PNs no planejamento; ${fmt(matched)} com embalagem vinculada; ${fmt(named)} com fornecedor identificado. ${matched<plan.length?'Existem PNs sem correspondência exata na base. Confira os códigos no Excel.':''}`;
 }
-function render(){renderSupplierLinkDiagnostics();renderWeeklySuppliers();renderSupplierSchedule();renderDashboard();renderPlanning();renderReceivingWindows();renderWeeklyHistory();renderPackaging();renderConfig();renderImpacts();renderLoadSelectors()}render();
+function render(){renderSupplierLinkDiagnostics();renderSupplierSchedule();renderWeeklySuppliers();renderDashboard();renderPlanning();renderReceivingWindows();renderWeeklyHistory();renderPackaging();renderConfig();renderImpacts();renderLoadSelectors()}render();
