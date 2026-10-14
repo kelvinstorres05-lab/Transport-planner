@@ -1,3 +1,15 @@
+// Helpers SVG usados nos graficos de historico (ausentes na v6).
+function svgEl(tag,attrs={}){
+ const el=document.createElementNS('http://www.w3.org/2000/svg',tag);
+ Object.entries(attrs).forEach(([k,v])=>el.setAttribute(k,String(v)));
+ return el;
+}
+function st(svg,x,y,value,size=11,anchor='middle',fill='#15345d',weight='400'){
+ const el=svgEl('text',{x,y,'font-size':size,'text-anchor':anchor,fill,'font-weight':weight});
+ el.textContent=String(value??'');
+ svg.appendChild(el);
+ return el;
+}
 const KEY='wk-transport-planner-v3';
 const DEFAULT={config:{capacity:52,minOcc:85,maxOcc:100,cost:1797.34,distance:68.8,ttw:0.78471,wtt:0.18538,windows:2,periodWeeks:18,beforePerWeek:3,weekLabel:'S34–S51',routeName:'TR1870FT67 - Nichibras/Hober > Forvia Goiana'},packaging:window.INIT_PACKAGING||[],plan:window.DEMO_PLAN||[],dailyReceipts:[],manualPlanActive:false,manualReceiptMode:'current',weeklyHistory:[],history:[]};
 let db=loadDB();let currentBook=null,currentRows=[],mapping={},currentPlanningFileName='';let editingPack=-1;let angle=-36,drag=false,lastX=0,lastY=0;
@@ -523,7 +535,7 @@ function importPackaging(e){
     packImportStatus('Importação cancelada. Nenhuma alteração foi feita.');return;
    }
    const old=db.packaging;db.packaging=[...result.values()];
-   try{persist();render()}catch(err){db.packaging=old;throw err}
+   try{persist()}catch(err){db.packaging=old;throw err}try{render()}catch(viewErr){console.error('Falha de atualização da tela após salvar:',viewErr);renderPackaging()}
    packImportStatus('✓ Base atualizada: '+added+' novos, '+updated+' atualizados, '+(mode==='replace'?removed:0)+' excluídos. Total: '+db.packaging.length+'.');
   }catch(err){console.error(err);packImportStatus('Importação não realizada: '+err.message,true)}
   finally{input.value=''}
