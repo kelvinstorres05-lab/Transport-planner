@@ -15,7 +15,7 @@ const DEFAULT={config:{capacity:52,minOcc:85,maxOcc:100,cost:1797.34,distance:68
 let db=loadDB();let currentBook=null,currentRows=[],mapping={},currentPlanningFileName='';let editingPack=-1;let angle=-36,drag=false,lastX=0,lastY=0;
 function clone(x){return JSON.parse(JSON.stringify(x))}function loadDB(){try{let x=JSON.parse(localStorage.getItem(KEY));if(x){if(!x.dailyReceipts)x.dailyReceipts=[];if(typeof x.manualPlanActive==='undefined')x.manualPlanActive=false;if(!x.manualReceiptMode)x.manualReceiptMode='current';if(!x.weeklyHistory)x.weeklyHistory=[];if(!x.config.routeName)x.config.routeName='TR1870FT67 - Nichibras/Hober > Forvia Goiana';return x}return clone(DEFAULT)}catch(e){return clone(DEFAULT)}}function persist(){localStorage.setItem(KEY,JSON.stringify(db))}
 function fmt(v,d=0){return Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d})}function money(v){return Number(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}function pct(v){return fmt(v*100,1)+'%'}function esc(s){return String(s??'').replace(/[&<>\"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[m]))}
-const titles={dashboard:['Dashboard executivo','Visão consolidada da necessidade de transporte WK'],loading3d:['Carregamento 3D','Visualização prevista da ocupação por janela e veículo'],planning:['Planejamento semanal','Importe Planned Receipts e Firmed Receipts'],receivingWindows:['Janelas de Recebimento','Detalhamento diário por data e Part Number'],weeklyHistory:['Histórico Semanal','Comparativo de capacidade, carretas, ocupação, saving e CO₂'],packaging:['Base de Embalagens','Cadastro editável de materiais e lotes'],impacts:['Impactos da otimização','Saving, viagens e CO₂ evitado'],config:['Configurações','Parâmetros operacionais do cálculo']};
+const titles={supplierSchedule:['Fornecedores e Janelas','Calendário e necessidade de veículos por fornecedor'],dashboard:['Dashboard executivo','Visão consolidada da necessidade de transporte WK'],loading3d:['Carregamento 3D','Visualização prevista da ocupação por janela e veículo'],planning:['Planejamento semanal','Importe Planned Receipts e Firmed Receipts'],receivingWindows:['Janelas de Recebimento','Detalhamento diário por data e Part Number'],weeklyHistory:['Histórico Semanal','Comparativo de capacidade, carretas, ocupação, saving e CO₂'],packaging:['Base de Embalagens','Cadastro editável de materiais e lotes'],impacts:['Impactos da otimização','Saving, viagens e CO₂ evitado'],config:['Configurações','Parâmetros operacionais do cálculo']};
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.getElementById(b.dataset.page).classList.add('active');pageTitle.textContent=titles[b.dataset.page][0];pageSub.textContent=titles[b.dataset.page][1];render()});
 function packIndex(){const m={};db.packaging.forEach(p=>{if(p.material)m[String(p.material).trim().toUpperCase()]=p});return m}
 function usedQty(r){let p=+r.planned||0,f=+r.firmed||0,m=document.getElementById('qtyMode')?.value||'sum';return m==='planned'?p:m==='firmed'?f:m==='max'?Math.max(p,f):p+f}
@@ -182,7 +182,13 @@ function receivingQty(r,mode){
   if(pm==='sum')return planned+firmed;
   return Math.max(planned,firmed);
 }
-function receivingWindowsData(){ensureReceiptAssignments();let mode=document.getElementById('windowReceiptMode')?.value||'current',packs=packIndex(),map=new Map();(db.dailyReceipts||[]).forEach(r=>{let qty=receivingQty(r,mode);if(!qty)return;let date=currentReceiptDate(r),pk=packs[String(r.material||'').trim().toUpperCase()],ipp=pk?+pk.itemsPerPallet||0:0,pallets=ipp?Math.ceil(qty/ipp):0;let w=map.get(date)||{date,items:[],pieces:0,pallets:0};w.items.push({...r,date,qty,pk,ipp,pallets,supplier:pk?.supplier||'SEM FORNECEDOR',status:pk&&ipp?'OK':'SEM EMBALAGEM'});w.pieces+=qty;w.pallets+=pallets;map.set(date,w)});return [...map.values()].sort((a,b)=>a.date.localeCompare(b.date)).map((w,i)=>{let vehicles=w.pallets?Math.ceil(w.pallets/db.config.capacity):0,occ=vehicles?w.pallets/(vehicles*db.config.capacity):0,st=occStatus(occ);return {...w,window:i+1,vehicles,occ,status:st[0],statusClass:st[1]}})}
+function supplierName(pk,r){
+ const name=String(pk?.supplier||'').trim(),code=String(pk?.supplierCode||'').trim();
+ if(name && !/^\d+$/.test(name))return name;
+ const id=code||name||String(r?.supplierCode||'').trim();
+ return id?('Fornecedor '+id):'SEM FORNECEDOR';
+}
+function receivingWindowsData(){ensureReceiptAssignments();let mode=document.getElementById('windowReceiptMode')?.value||'current',packs=packIndex(),map=new Map();(db.dailyReceipts||[]).forEach(r=>{let qty=receivingQty(r,mode);if(!qty)return;let date=currentReceiptDate(r),pk=packs[String(r.material||'').trim().toUpperCase()],ipp=pk?+pk.itemsPerPallet||0:0,pallets=ipp?Math.ceil(qty/ipp):0;let w=map.get(date)||{date,items:[],pieces:0,pallets:0};w.items.push({...r,date,qty,pk,ipp,pallets,supplier:supplierName(pk,r),status:pk&&ipp?'OK':'SEM EMBALAGEM'});w.pieces+=qty;w.pallets+=pallets;map.set(date,w)});return [...map.values()].sort((a,b)=>a.date.localeCompare(b.date)).map((w,i)=>{let vehicles=w.pallets?Math.ceil(w.pallets/db.config.capacity):0,occ=vehicles?w.pallets/(vehicles*db.config.capacity):0,st=occStatus(occ);return {...w,window:i+1,vehicles,occ,status:st[0],statusClass:st[1]}})}
 function supplierGroupsForWindow(w){let m=new Map();w.items.forEach(r=>{let supplier=String(r.supplier||r.pk?.supplier||'SEM FORNECEDOR').trim()||'SEM FORNECEDOR',g=m.get(supplier)||{supplier,pn:new Set(),pieces:0,pallets:0,items:[]};g.pn.add(String(r.material).toUpperCase());g.pieces+=+r.qty||0;g.pallets+=+r.pallets||0;g.items.push(r);m.set(supplier,g)});return [...m.values()].map(g=>({...g,pnCount:g.pn.size})).sort((a,b)=>b.pallets-a.pallets||b.pieces-a.pieces)}
 function supplierDecisionCard(g,w){let remaining=Math.max(0,w.pallets-g.pallets),newVehicles=remaining?Math.ceil(remaining/db.config.capacity):0,newOcc=newVehicles?remaining/(newVehicles*db.config.capacity):0,vehDelta=newVehicles-w.vehicles,decision=vehDelta<0?`Reduz ${Math.abs(vehDelta)} carreta(s)`:vehDelta>0?`Aumenta ${vehDelta} carreta(s)`:'Não altera nº de carretas';return `<details class=\"supplier-load\"><summary><div><b>${esc(g.supplier)}</b><div class=\"smalltxt\">${fmt(g.pnCount)} PN • ${fmt(g.pieces)} peças • ${fmt(g.pallets)} pallets • ${pct(w.pallets?g.pallets/w.pallets:0)} da janela</div></div><span class=\"badge ${vehDelta<0?'ok':'warn'}\">${decision}</span></summary><div class=\"supplier-load-body\"><div class=\"decision-strip\"><span>Se retirar/remanejar: <b>-${fmt(g.pallets)} pallets</b></span><span>Restam: <b>${fmt(remaining)} pallets</b></span><span>Carretas: <b>${fmt(w.vehicles)} → ${fmt(newVehicles)}</b></span><span>Nova ocupação: <b>${pct(newOcc)}</b></span><span>Saving potencial: <b>${money((w.vehicles-newVehicles)*db.config.cost)}</b></span></div><div class=\"table-wrap\"><table><thead><tr><th>Part Number</th><th>Descrição</th><th>Qtd.</th><th>Pallets</th></tr></thead><tbody>${g.items.map(r=>`<tr><td><b>${esc(r.material)}</b></td><td>${esc(r.pk?.description||r.description||'')}</td><td class=\"num\">${fmt(r.qty)}</td><td class=\"num\">${r.status==='OK'?fmt(r.pallets):'—'}</td></tr>`).join('')}</tbody></table></div></div></details>`}
 
@@ -691,4 +697,75 @@ function autoMap(cols){let defs={material:['material','item','part','codigo','n�
   return Number.isFinite(n)?n:0;
 }function readWorkbook(file,cb){let r=new FileReader();r.onload=e=>{let wb=XLSX.read(e.target.result,{type:'array'}),ws=wb.Sheets[wb.SheetNames[0]];cb(XLSX.utils.sheet_to_json(ws,{defval:''}))};r.readAsArrayBuffer(file)}
 function exportBackup(){let b=new Blob([JSON.stringify(db,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='wk_transport_backup.json';a.click()}function exportProcessed(){let t=totals(),rows=t.lines.map(x=>({Material:x.row.material,Descricao:x.pk?.description||x.row.description,Planned:x.row.planned,Firmed:x.row.firmed,Quantidade:x.qty,ItensPallet:x.ipp,Pallets:x.pallets,Status:x.status})),ws=XLSX.utils.json_to_sheet(rows),wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Resultado');XLSX.writeFile(wb,'WK_resultado_planejamento.xlsx')}function resetAll(){if(confirm('Restaurar dados iniciais?')){db=clone(DEFAULT);persist();render()}}
-function render(){renderDashboard();renderPlanning();renderReceivingWindows();renderWeeklyHistory();renderPackaging();renderConfig();renderImpacts();renderLoadSelectors()}render();
+
+const SUPPLIER_DAYS=['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
+function supplierKey(s){return String(s||'').trim().toUpperCase()}
+function scheduleFor(name){
+ db.supplierSchedules ||= {};
+ return db.supplierSchedules[supplierKey(name)]||{days:[1,2,3,4,5],windows:1,vehicles:1};
+}
+function supplierDemandForDate(date){
+ const mode='firmed';
+ const packs=packIndex(),groups=new Map();
+ (db.dailyReceipts||[]).forEach(r=>{
+   if(currentReceiptDate(r)!==date)return;
+   const qty=receivingQty(r,mode);
+   if(qty<=0)return;
+   const pk=packs[String(r.material||'').trim().toUpperCase()];
+   const supplier=supplierName(pk,r),key=supplierKey(supplier);
+   const g=groups.get(key)||{supplier,materials:new Set(),pieces:0,pallets:0,missing:0};
+   g.materials.add(String(r.material||'').toUpperCase());
+   g.pieces+=qty;
+   const ipp=Number(pk?.itemsPerPallet)||0;
+   if(ipp>0)g.pallets+=Math.ceil(qty/ipp);else g.missing++;
+   groups.set(key,g);
+ });
+ return [...groups.values()].map(g=>{
+   const sc=scheduleFor(g.supplier),weekday=new Date(date+'T12:00:00').getDay();
+   const allowed=(sc.days||[]).includes(weekday);
+   const cap=Math.max(1,Number(db.config.capacity)||52);
+   const vehicles=Math.ceil(g.pallets/cap),perWindow=Math.max(1,Number(sc.vehicles)||1);
+   const windows=Math.ceil(vehicles/perWindow),available=allowed?Math.max(0,Number(sc.windows)||0):0;
+   return {...g,vehicles,windows,available,allowed,
+    result:g.missing?'Embalagem pendente':!allowed?'Dia não habilitado':windows>available?'Janelas insuficientes':'Capacidade disponível'};
+ }).sort((a,b)=>a.supplier.localeCompare(b.supplier,'pt-BR'));
+}
+function renderSupplierSchedule(){
+ const table=document.getElementById('supplierScheduleRows');if(!table)return;
+ db.supplierSchedules ||= {};
+ const names=new Set((db.packaging||[]).map(p=>supplierName(p,null)));
+ (db.dailyReceipts||[]).forEach(r=>names.add(supplierName(packIndex()[String(r.material||'').trim().toUpperCase()],r)));
+ const all=[...names].filter(Boolean).sort((a,b)=>a.localeCompare(b,'pt-BR'));
+ table.innerHTML=all.map((name,i)=>{
+  const sc=scheduleFor(name);
+  return `<tr><td><b>${esc(name)}</b></td><td>${SUPPLIER_DAYS.map((d,j)=>`<label style="display:inline-flex;gap:2px;margin-right:7px"><input type="checkbox" class="supday" data-i="${i}" value="${j}" ${(sc.days||[]).includes(j)?'checked':''}>${d}</label>`).join('')}</td><td><input class="supwindows" data-i="${i}" type="number" min="0" max="30" value="${sc.windows}" style="width:75px"></td><td><input class="supvehicles" data-i="${i}" type="number" min="1" max="30" value="${sc.vehicles}" style="width:75px"></td><td><button class="btn" onclick="saveSupplierSchedule(${i})">Salvar</button></td></tr>`;
+ }).join('');
+ window.__supplierNames=all;
+ const dateInput=document.getElementById('supplierDemandDate');
+ if(!dateInput.value){
+   const first=(db.dailyReceipts||[]).map(r=>currentReceiptDate(r)).filter(Boolean).sort()[0];
+   dateInput.value=first||new Date().toISOString().slice(0,10);
+ }
+ const data=supplierDemandForDate(dateInput.value);
+ document.getElementById('supplierDemandSummary').innerHTML=`<div class="notice"><b>${esc(dateInput.value.split('-').reverse().join('/'))}</b> • ${fmt(data.length)} fornecedores • ${fmt(data.reduce((n,g)=>n+g.pieces,0))} peças • ${fmt(data.reduce((n,g)=>n+g.pallets,0))} pallets • ${fmt(data.reduce((n,g)=>n+g.vehicles,0))} veículos • ${fmt(data.reduce((n,g)=>n+g.windows,0))} janelas necessárias</div>`;
+ document.getElementById('supplierDemandRows').innerHTML=data.map(g=>`<tr><td>${esc(g.supplier)}</td><td>${fmt(g.materials.size)}</td><td>${fmt(g.pieces)}</td><td>${fmt(g.pallets)}</td><td>${fmt(g.vehicles)}</td><td>${fmt(g.windows)}</td><td>${fmt(g.available)}</td><td>${esc(g.result)}</td></tr>`).join('')||'<tr><td colspan="8">Sem demanda na data selecionada.</td></tr>';
+}
+function saveSupplierSchedule(i){
+ const name=window.__supplierNames?.[i];if(!name)return;
+ const days=[...document.querySelectorAll(`.supday[data-i="${i}"]:checked`)].map(x=>Number(x.value));
+ const windows=Number(document.querySelector(`.supwindows[data-i="${i}"]`)?.value);
+ const vehicles=Number(document.querySelector(`.supvehicles[data-i="${i}"]`)?.value);
+ if(!Number.isInteger(windows)||windows<0||!Number.isInteger(vehicles)||vehicles<1){alert('Informe números válidos para janelas e veículos.');return}
+ db.supplierSchedules ||= {};
+ db.supplierSchedules[supplierKey(name)]={days,windows,vehicles};
+ persist();renderSupplierSchedule();
+ document.getElementById('supplierScheduleStatus').textContent='Calendário salvo para '+name;
+}
+function exportSupplierSchedule(){
+ const date=document.getElementById('supplierDemandDate')?.value||'';
+ const data=supplierDemandForDate(date);
+ const rows=data.map(g=>({Data:date,Fornecedor:g.supplier,PN:g.materials.size,Peças:g.pieces,Pallets:g.pallets,'Veículos necessários':g.vehicles,'Janelas necessárias':g.windows,'Janelas disponíveis':g.available,Status:g.result}));
+ const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'Cenario por fornecedor');XLSX.writeFile(wb,'Cenario_Fornecedores_'+date+'.xlsx');
+}
+
+function render(){renderSupplierSchedule();renderDashboard();renderPlanning();renderReceivingWindows();renderWeeklyHistory();renderPackaging();renderConfig();renderImpacts();renderLoadSelectors()}render();
