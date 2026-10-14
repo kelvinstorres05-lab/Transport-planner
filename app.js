@@ -17,27 +17,29 @@ function clone(x){return JSON.parse(JSON.stringify(x))}function loadDB(){try{let
 function fmt(v,d=0){return Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d})}function money(v){return Number(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}function pct(v){return fmt(v*100,1)+'%'}function esc(s){return String(s??'').replace(/[&<>\"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[m]))}
 const titles={supplierSchedule:['Fornecedores e Janelas','Calendário e necessidade de veículos por fornecedor'],dashboard:['Dashboard executivo','Visão consolidada da necessidade de transporte WK'],loading3d:['Carregamento 3D','Visualização prevista da ocupação por janela e veículo'],planning:['Planejamento semanal','Importe Planned Receipts e Firmed Receipts'],receivingWindows:['Janelas de Recebimento','Detalhamento diário por data e Part Number'],weeklyHistory:['Histórico Semanal','Comparativo de capacidade, carretas, ocupação, saving e CO₂'],packaging:['Base de Embalagens','Cadastro editável de materiais e lotes'],impacts:['Impactos da otimização','Saving, viagens e CO₂ evitado'],config:['Configurações','Parâmetros operacionais do cálculo']};
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.getElementById(b.dataset.page).classList.add('active');pageTitle.textContent=titles[b.dataset.page][0];pageSub.textContent=titles[b.dataset.page][1];render()});
+function pnKey(v){return String(v??'').trim().toUpperCase().replace(/\.0$/,'').replace(/\s+/g,'').replace(/[^A-Z0-9]/g,'')}
 function packIndex(){
- const m={};
- const key=v=>String(v??'').trim().toUpperCase().replace(/\.0$/,'').replace(/\s+/g,'');
- (db.packaging||[]).forEach(p=>{
-   const material=p.material||p.partNumber||p.partnumber||p.Material||p['Part number'];
-   if(material)m[key(material)]=p;
- });
- return m;
+ const m={};(db.packaging||[]).forEach(p=>{
+  const material=p.material||p.partNumber||p.partnumber||p.Material||p['Part number'];
+  if(material)m[pnKey(material)]=p;
+ });return m;
 }
+function packForMaterial(material){return packIndex()[pnKey(material)]||null}
 function usedQty(r){let p=+r.planned||0,f=+r.firmed||0,m=document.getElementById('qtyMode')?.value||'sum';return m==='planned'?p:m==='firmed'?f:m==='max'?Math.max(p,f):p+f}
-function lineCalc(r){let pk=packIndex()[String(r.material||'').trim().toUpperCase()],qty=usedQty(r),ipp=pk?+pk.itemsPerPallet||0:0;return{qty,pk,ipp,pallets:ipp>0?Math.ceil(qty/ipp):0,status:!pk?'SEM EMBALAGEM':ipp<=0?'LOTE INVÁLIDO':'OK'}}
+function lineCalc(r){let pk=packForMaterial(r.material),qty=usedQty(r),ipp=pk?+pk.itemsPerPallet||0:0;return{qty,pk,ipp,pallets:ipp>0?Math.ceil(qty/ipp):0,status:!pk?'SEM EMBALAGEM':ipp<=0?'LOTE INVÁLIDO':'OK'}}
 function optimizeVehicles(pallets){const c=db.config,cap=c.capacity,n=Math.ceil(Math.max(0,pallets)/cap);if(!pallets)return[];let out=[],base=Math.floor(pallets/n),extra=pallets%n;for(let i=0;i<n;i++){let load=base+(i<extra?1:0);out.push({pallets:load,occ:load/cap})}return out}
 function totals(){let lines=db.plan.map((r,i)=>({...lineCalc(r),row:r,index:i})),pieces=lines.reduce((a,x)=>a+x.qty,0),pallets=lines.reduce((a,x)=>a+x.pallets,0),windowPallets=[],vehicles=[];if(db.manualPlanActive&&(db.dailyReceipts||[]).length){let ws=receivingWindowsData();pieces=ws.reduce((a,x)=>a+x.pieces,0);pallets=ws.reduce((a,x)=>a+x.pallets,0);windowPallets=ws.map(x=>x.pallets);ws.forEach((w,wi)=>optimizeVehicles(w.pallets).forEach((v,vi)=>vehicles.push({...v,window:wi+1,vehicle:vi+1,date:w.date})));}else{let w=Math.max(1,db.config.windows);windowPallets=Array(w).fill(0);for(let i=0;i<pallets;i++)windowPallets[i%w]++;windowPallets.forEach((p,wi)=>optimizeVehicles(p).forEach((v,vi)=>vehicles.push({...v,window:wi+1,vehicle:vi+1})));}let perWeek=vehicles.length,before=db.config.beforePerWeek,avoidedWeek=Math.max(0,before-perWeek),weeks=db.config.periodWeeks,avoided=avoidedWeek*weeks,saving=avoided*db.config.cost,km=avoided*db.config.distance,ttw=km*db.config.ttw,wtw=km*(db.config.ttw+db.config.wtt),avg=vehicles.length?vehicles.reduce((a,v)=>a+v.occ,0)/vehicles.length:0;return{lines,pieces,pallets,windowPallets,vehicles,perWeek,avoidedWeek,avoided,saving,km,ttw,wtw,avg,red:before?avoidedWeek/before:0,crit:lines.filter(x=>x.status!=='OK')}}
 function kpi(label,value,note){return `<div class="card"><div class="kpi-label">${label}</div><div class="kpi-value">${value}</div><div class="kpi-note">${note}</div></div>`}
 function occStatus(o){return o>db.config.maxOcc/100?['ACIMA DE 100%','bad']:o<db.config.minOcc/100?['ABAIXO DE 85%','warn']:['OK','ok']}
 function renderDashboard(){let t=totals();kpiGrid.innerHTML=[kpi('Peças',fmt(t.pieces),'Quantidade calculada'),kpi('Pallets',fmt(t.pallets),'Pela base de embalagens'),kpi('Carretas/semana',fmt(t.perWeek),'Plano otimizado'),kpi('Ocupação média',pct(t.avg),'Alvo 85%–100%'),kpi('Saving',money(t.saving),db.config.weekLabel),kpi('CO₂ TTW evitado',fmt(t.ttw/1000,2)+' t','Estimativa')].join('');windowCards.innerHTML=t.windowPallets.map((p,i)=>`<div class="pill">Janela ${i+1}: ${p} pallets</div>`).join('')||'<div class="smalltxt">Sem planejamento.</div>';planSummary.innerHTML=`O plano possui <b>${fmt(t.pallets)} pallets</b> e requer <b>${t.perWeek} carreta(s) por semana</b> em <b>${db.config.windows} janela(s)</b>. Economia potencial no período: <b>${money(t.saving)}</b>.`;criticalSummary.innerHTML=t.crit.length?`<span class="badge bad">${t.crit.length} material(is) crítico(s)</span><div class="smalltxt" style="margin-top:8px">Cadastre ou corrija embalagem/lote antes da contratação.</div>`:'<span class="badge ok">Todos os materiais com embalagem válida</span>';drawOccChart(t)}
-function supplierNameForLine(line){return String(line.pk?.supplier||line.pack?.supplier||'SEM FORNECEDOR').trim()||'SEM FORNECEDOR'}
+function supplierNameForLine(line){
+ const pk=line.pk||line.pack||packForMaterial(line.row?.material||line.material);
+ return supplierName(pk,line.row||line);
+}
 function supplierSummaryFromLines(lines){let m=new Map();lines.forEach(x=>{let supplier=supplierNameForLine(x),cur=m.get(supplier)||{supplier,pn:new Set(),pieces:0,pallets:0};cur.pn.add(String(x.row?.material||x.material||'').toUpperCase());cur.pieces+=+(x.qty??x.quantity??0)||0;cur.pallets+=+x.pallets||0;m.set(supplier,cur)});return [...m.values()].map(x=>({...x,pnCount:x.pn.size})).sort((a,b)=>b.pallets-a.pallets||b.pieces-a.pieces)}
 function renderSupplierPlanSummary(lines){let el=document.getElementById('supplierPlanSummary');if(!el)return;let arr=supplierSummaryFromLines(lines),totalP=arr.reduce((a,x)=>a+x.pallets,0),totalQ=arr.reduce((a,x)=>a+x.pieces,0);if(!arr.length){el.innerHTML='<div class=\"smalltxt\">Sem fornecedores no planejamento atual.</div>';return}el.innerHTML=arr.map(x=>`<div class=\"supplier-card\"><div class=\"supplier-title\">${esc(x.supplier)}</div><div class=\"supplier-metrics\"><span><b>${fmt(x.pnCount)}</b> PN</span><span><b>${fmt(x.pieces)}</b> peças</span><span><b>${fmt(x.pallets)}</b> pallets</span></div><div class=\"smalltxt\">Participação: ${pct(totalP?x.pallets/totalP:0)} dos pallets • ${pct(totalQ?x.pieces/totalQ:0)} das peças</div></div>`).join('')}
 
-function renderPlanning(){let t=totals(),lf=db.lastPlanningImport,packs=packIndex();if(db.manualPlanActive&&db.processedScenario?.length){let lines=db.processedScenario.map((r,i)=>{let pk=packs[String(r.material||'').trim().toUpperCase().replace(/\.0$/,'').replace(/\s+/g,'')],ipp=pk?+pk.itemsPerPallet||0:0,pallets=ipp?Math.ceil(r.qty/ipp):0;return{row:{material:r.material,description:r.description,planned:r.planned,firmed:r.firmed},pk,qty:r.qty,ipp,pallets,status:pk&&ipp?'OK':'SEM EMBALAGEM',dates:r.dates,index:i}});planMeta.textContent=`CENÁRIO REPROCESSADO • ${lines.length} materiais • ${fmt(lines.reduce((a,x)=>a+x.qty,0))} peças • ${fmt(t.pallets)} pallets${lf?.file?' • Base: '+lf.file:''}`;planRows.innerHTML=lines.map(x=>`<tr class="${x.dates?.length?'processed-plan-row':''}"><td><b>${esc(x.pk?.supplier||'SEM FORNECEDOR')}</b></td><td>${esc(x.row.material)}<div class="smalltxt">${(x.dates||[]).map(ptDate).join(' • ')}</div></td><td>${esc(x.pk?.description||x.row.description||'')}</td><td class="num">${fmt(x.row.planned)}</td><td class="num">${fmt(x.row.firmed)}</td><td class="num"><b>${fmt(x.qty)}</b></td><td class="num">${fmt(x.ipp)}</td><td class="num">${fmt(x.pallets)}</td><td><span class="badge ${x.status==='OK'?'ok':'bad'}">${x.status}</span></td></tr>`).join('');renderSupplierPlanSummary(lines);return}planMeta.textContent=`${db.plan.length} linhas • ${fmt(t.pieces)} peças • ${fmt(t.pallets)} pallets${lf?.file?' • Arquivo: '+lf.file:''}`;planRows.innerHTML=t.lines.map(x=>`<tr><td><b>${esc(x.pk?.supplier||'SEM FORNECEDOR')}</b></td><td>${esc(x.row.material)}</td><td>${esc(x.pk?.description||x.row.description||'')}</td><td class="num">${fmt(x.row.planned)}</td><td class="num">${fmt(x.row.firmed)}</td><td class="num">${fmt(x.qty)}</td><td class="num">${fmt(x.ipp)}</td><td class="num">${fmt(x.pallets)}</td><td><span class="badge ${x.status==='OK'?'ok':'bad'}">${x.status}</span></td></tr>`).join('');renderSupplierPlanSummary(t.lines)}
+function renderPlanning(){let t=totals(),lf=db.lastPlanningImport,packs=packIndex();if(db.manualPlanActive&&db.processedScenario?.length){let lines=db.processedScenario.map((r,i)=>{let pk=packs[pnKey(r.material)],ipp=pk?+pk.itemsPerPallet||0:0,pallets=ipp?Math.ceil(r.qty/ipp):0;return{row:{material:r.material,description:r.description,planned:r.planned,firmed:r.firmed},pk,qty:r.qty,ipp,pallets,status:pk&&ipp?'OK':'SEM EMBALAGEM',dates:r.dates,index:i}});planMeta.textContent=`CENÁRIO REPROCESSADO • ${lines.length} materiais • ${fmt(lines.reduce((a,x)=>a+x.qty,0))} peças • ${fmt(t.pallets)} pallets${lf?.file?' • Base: '+lf.file:''}`;planRows.innerHTML=lines.map(x=>`<tr class="${x.dates?.length?'processed-plan-row':''}"><td><b>${esc(x.pk?.supplier||'SEM FORNECEDOR')}</b></td><td>${esc(x.row.material)}<div class="smalltxt">${(x.dates||[]).map(ptDate).join(' • ')}</div></td><td>${esc(x.pk?.description||x.row.description||'')}</td><td class="num">${fmt(x.row.planned)}</td><td class="num">${fmt(x.row.firmed)}</td><td class="num"><b>${fmt(x.qty)}</b></td><td class="num">${fmt(x.ipp)}</td><td class="num">${fmt(x.pallets)}</td><td><span class="badge ${x.status==='OK'?'ok':'bad'}">${x.status}</span></td></tr>`).join('');renderSupplierPlanSummary(lines);return}planMeta.textContent=`${db.plan.length} linhas • ${fmt(t.pieces)} peças • ${fmt(t.pallets)} pallets${lf?.file?' • Arquivo: '+lf.file:''}`;planRows.innerHTML=t.lines.map(x=>`<tr><td><b>${esc(x.pk?.supplier||'SEM FORNECEDOR')}</b></td><td>${esc(x.row.material)}</td><td>${esc(x.pk?.description||x.row.description||'')}</td><td class="num">${fmt(x.row.planned)}</td><td class="num">${fmt(x.row.firmed)}</td><td class="num">${fmt(x.qty)}</td><td class="num">${fmt(x.ipp)}</td><td class="num">${fmt(x.pallets)}</td><td><span class="badge ${x.status==='OK'?'ok':'bad'}">${x.status}</span></td></tr>`).join('');renderSupplierPlanSummary(t.lines)}
 
 let selectedReceiptIds=new Set();
 function updateBulkSelectionUI(){
@@ -191,13 +193,22 @@ function receivingQty(r,mode){
   return Math.max(planned,firmed);
 }
 function supplierName(pk,r){
- const name=String(pk?.supplier||pk?.supplierName||pk?.vendorName||pk?.['Name of vendor']||r?.supplier||r?.vendorName||'').trim();
  const code=String(pk?.supplierCode||pk?.vendor||pk?.Vendor||r?.supplierCode||r?.vendor||'').trim();
- if(name && !/^\\d+$/.test(name))return name;
- const id=code||name;
- return id?('Fornecedor '+id):'SEM FORNECEDOR';
+ const candidate=String(pk?.supplier||pk?.supplierName||pk?.vendorName||pk?.['Name of vendor']||r?.supplier||r?.vendorName||'').trim();
+ if(candidate&&!/^\d+$/.test(candidate))return candidate;
+ const codeToFind=code||candidate;
+ if(codeToFind){
+  const match=(db.packaging||[]).find(p=>{
+   const c=String(p.supplierCode||p.vendor||p.Vendor||'').trim();
+   const n=String(p.supplier||p.supplierName||'').trim();
+   return c===codeToFind && n && !/^\d+$/.test(n);
+  });
+  if(match)return String(match.supplier||match.supplierName).trim();
+  return 'Fornecedor '+codeToFind;
+ }
+ return 'SEM FORNECEDOR';
 }
-function receivingWindowsData(){ensureReceiptAssignments();let mode=document.getElementById('windowReceiptMode')?.value||'current',packs=packIndex(),map=new Map();(db.dailyReceipts||[]).forEach(r=>{let qty=receivingQty(r,mode);if(!qty)return;let date=currentReceiptDate(r),pk=packs[String(r.material||'').trim().toUpperCase().replace(/\.0$/,'').replace(/\s+/g,'')],ipp=pk?+pk.itemsPerPallet||0:0,pallets=ipp?Math.ceil(qty/ipp):0;let w=map.get(date)||{date,items:[],pieces:0,pallets:0};w.items.push({...r,date,qty,pk,ipp,pallets,supplier:supplierName(pk,r),status:pk&&ipp?'OK':'SEM EMBALAGEM'});w.pieces+=qty;w.pallets+=pallets;map.set(date,w)});return [...map.values()].sort((a,b)=>a.date.localeCompare(b.date)).map((w,i)=>{let vehicles=w.pallets?Math.ceil(w.pallets/db.config.capacity):0,occ=vehicles?w.pallets/(vehicles*db.config.capacity):0,st=occStatus(occ);return {...w,window:i+1,vehicles,occ,status:st[0],statusClass:st[1]}})}
+function receivingWindowsData(){ensureReceiptAssignments();let mode=document.getElementById('windowReceiptMode')?.value||'current',packs=packIndex(),map=new Map();(db.dailyReceipts||[]).forEach(r=>{let qty=receivingQty(r,mode);if(!qty)return;let date=currentReceiptDate(r),pk=packs[pnKey(r.material)],ipp=pk?+pk.itemsPerPallet||0:0,pallets=ipp?Math.ceil(qty/ipp):0;let w=map.get(date)||{date,items:[],pieces:0,pallets:0};w.items.push({...r,date,qty,pk,ipp,pallets,supplier:supplierName(pk,r),status:pk&&ipp?'OK':'SEM EMBALAGEM'});w.pieces+=qty;w.pallets+=pallets;map.set(date,w)});return [...map.values()].sort((a,b)=>a.date.localeCompare(b.date)).map((w,i)=>{let vehicles=w.pallets?Math.ceil(w.pallets/db.config.capacity):0,occ=vehicles?w.pallets/(vehicles*db.config.capacity):0,st=occStatus(occ);return {...w,window:i+1,vehicles,occ,status:st[0],statusClass:st[1]}})}
 function supplierGroupsForWindow(w){let m=new Map();w.items.forEach(r=>{let supplier=String(r.supplier||r.pk?.supplier||'SEM FORNECEDOR').trim()||'SEM FORNECEDOR',g=m.get(supplier)||{supplier,pn:new Set(),pieces:0,pallets:0,items:[]};g.pn.add(String(r.material).toUpperCase());g.pieces+=+r.qty||0;g.pallets+=+r.pallets||0;g.items.push(r);m.set(supplier,g)});return [...m.values()].map(g=>({...g,pnCount:g.pn.size})).sort((a,b)=>b.pallets-a.pallets||b.pieces-a.pieces)}
 function supplierDecisionCard(g,w){let remaining=Math.max(0,w.pallets-g.pallets),newVehicles=remaining?Math.ceil(remaining/db.config.capacity):0,newOcc=newVehicles?remaining/(newVehicles*db.config.capacity):0,vehDelta=newVehicles-w.vehicles,decision=vehDelta<0?`Reduz ${Math.abs(vehDelta)} carreta(s)`:vehDelta>0?`Aumenta ${vehDelta} carreta(s)`:'Não altera nº de carretas';return `<details class=\"supplier-load\"><summary><div><b>${esc(g.supplier)}</b><div class=\"smalltxt\">${fmt(g.pnCount)} PN • ${fmt(g.pieces)} peças • ${fmt(g.pallets)} pallets • ${pct(w.pallets?g.pallets/w.pallets:0)} da janela</div></div><span class=\"badge ${vehDelta<0?'ok':'warn'}\">${decision}</span></summary><div class=\"supplier-load-body\"><div class=\"decision-strip\"><span>Se retirar/remanejar: <b>-${fmt(g.pallets)} pallets</b></span><span>Restam: <b>${fmt(remaining)} pallets</b></span><span>Carretas: <b>${fmt(w.vehicles)} → ${fmt(newVehicles)}</b></span><span>Nova ocupação: <b>${pct(newOcc)}</b></span><span>Saving potencial: <b>${money((w.vehicles-newVehicles)*db.config.cost)}</b></span></div><div class=\"table-wrap\"><table><thead><tr><th>Part Number</th><th>Descrição</th><th>Qtd.</th><th>Pallets</th></tr></thead><tbody>${g.items.map(r=>`<tr><td><b>${esc(r.material)}</b></td><td>${esc(r.pk?.description||r.description||'')}</td><td class=\"num\">${fmt(r.qty)}</td><td class=\"num\">${r.status==='OK'?fmt(r.pallets):'—'}</td></tr>`).join('')}</tbody></table></div></div></details>`}
 
@@ -505,6 +516,7 @@ function normalizePackRow(row){
   let material=String(packagingField(row,['Part number','Material','Part Number','Número do material','Codigo','Código'])||'').trim();
   let supplier=String(packagingField(row,['Fornecedor','Supplier','Name of vendor'])||'').trim();
   let supplierCode=String(packagingField(row,['Vendor','Código fornecedor','Supplier Code'])||'').trim();
+  if(!supplierCode && /^\d+$/.test(supplier)){supplierCode=supplier;supplier=''}
   let description=String(packagingField(row,['Descrição','Descricao','Description','Texto breve de material'])||'').trim();
   let itemsPerBox=num(packagingField(row,['PARTS/ PU','PARTS/PU','Itens/caixa','Itens por caixa','Peças/Caixa','Items per box']));
   let boxesPerPallet=num(packagingField(row,['PU/HU','Caixas/Pallet','Caixas por pallet','Boxes per pallet']));
@@ -720,7 +732,7 @@ function supplierDemandForDate(date){
    if(currentReceiptDate(r)!==date)return;
    const qty=receivingQty(r,mode);
    if(qty<=0)return;
-   const pk=packs[String(r.material||'').trim().toUpperCase().replace(/\.0$/,'').replace(/\s+/g,'')];
+   const pk=packs[pnKey(r.material)];
    const supplier=supplierName(pk,r),key=supplierKey(supplier);
    const g=groups.get(key)||{supplier,materials:new Set(),pieces:0,pallets:0,missing:0};
    g.materials.add(String(r.material||'').toUpperCase());
@@ -743,7 +755,7 @@ function renderSupplierSchedule(){
  const table=document.getElementById('supplierScheduleRows');if(!table)return;
  db.supplierSchedules ||= {};
  const names=new Set((db.packaging||[]).map(p=>supplierName(p,null)));
- (db.dailyReceipts||[]).forEach(r=>names.add(supplierName(packIndex()[String(r.material||'').trim().toUpperCase()],r)));
+ (db.dailyReceipts||[]).forEach(r=>names.add(supplierName(packForMaterial(r.material),r)));
  const all=[...names].filter(Boolean).sort((a,b)=>a.localeCompare(b,'pt-BR'));
  table.innerHTML=all.map((name,i)=>{
   const sc=scheduleFor(name);
@@ -820,4 +832,12 @@ function exportWeeklySuppliers(){
  const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'Veiculos Semanais');XLSX.writeFile(wb,'WK_Veiculos_Semanais_Fornecedor.xlsx');
 }
 
-function render(){renderWeeklySuppliers();renderSupplierSchedule();renderDashboard();renderPlanning();renderReceivingWindows();renderWeeklyHistory();renderPackaging();renderConfig();renderImpacts();renderLoadSelectors()}render();
+function openSupplierSettings(){document.querySelector('.nav button[data-page="supplierSchedule"]')?.click()}
+function renderSupplierLinkDiagnostics(){
+ const el=document.getElementById('supplierLinkDiagnostics');if(!el)return;
+ const plan=db.plan||[],pack=db.packaging||[],idx=packIndex();
+ const matched=plan.filter(r=>idx[pnKey(r.material)]).length;
+ const named=plan.filter(r=>{const p=idx[pnKey(r.material)];return p&&supplierName(p,r)!=='SEM FORNECEDOR'}).length;
+ el.innerHTML=`<b>Diagnóstico de vínculo:</b> ${fmt(pack.length)} materiais na base de embalagens; ${fmt(plan.length)} PNs no planejamento; ${fmt(matched)} com embalagem vinculada; ${fmt(named)} com fornecedor identificado. ${matched<plan.length?'Existem PNs sem correspondência exata na base. Confira os códigos no Excel.':''}`;
+}
+function render(){renderSupplierLinkDiagnostics();renderWeeklySuppliers();renderSupplierSchedule();renderDashboard();renderPlanning();renderReceivingWindows();renderWeeklyHistory();renderPackaging();renderConfig();renderImpacts();renderLoadSelectors()}render();
