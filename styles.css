@@ -49,3 +49,12 @@
 .firmed-op{background:#dff0d4!important;color:#365d1d!important;font-weight:800}
 .planned-op{background:#e6eef8!important;color:#35516f!important;font-weight:800}
 .composition-cell{font-size:11px;font-weight:800;color:#58636f;white-space:nowrap}
+
+/* Packaging controls must stay visible on narrow screens */
+#packaging .toolbar{display:flex;flex-direction:column;align-items:stretch;gap:14px}
+#packaging .pack-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;overflow:visible}
+#packaging .pack-actions>*{max-width:100%;min-width:0}
+#packaging .pack-actions .search{flex:1 1 220px}
+#packaging .pack-actions select{flex:1 1 240px}
+#packaging .pack-actions button{flex:1 1 145px;white-space:normal}
+#packImportStatus{display:block;margin:10px 0;padding:12px!important;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;white-space:normal}

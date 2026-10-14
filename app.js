@@ -486,30 +486,49 @@ function normalizePackRow(row){
   return {material,supplier,supplierCode,description,itemsPerBox,boxesPerPallet,itemsPerPallet,unit:'PC'};
 }
 function importPackaging(e){
-  let input=e.target,file=input.files?.[0];
-  if(!file)return;
-  packImportStatus('Lendo '+file.name+'...');
-  let reader=new FileReader();
-  reader.onerror=()=>{packImportStatus('Erro ao ler o arquivo.',true);input.value=''};
-  reader.onload=ev=>{
-    try{
-      let wb=XLSX.read(ev.target.result,{type:'array'});
-      let sheet=wb.SheetNames.find(n=>/HOBER|NICHIBRAS/i.test(n))||wb.SheetNames[0];
-      let rows=XLSX.utils.sheet_to_json(wb.Sheets[sheet],{defval:'',raw:true});
-      let parsed=rows.map(normalizePackRow).filter(r=>r.material);
-      if(!parsed.length)throw Error('Nenhum Part Number encontrado. Verifique os cabeçalhos.');
-      let unique=new Map();parsed.forEach(r=>unique.set(r.material.toUpperCase(),r));
-      let mode=document.getElementById('packImportMode')?.value||'merge';
-      let existing=new Map((mode==='replace'?[]:db.packaging).map(r=>[String(r.material||'').trim().toUpperCase(),r]));
-      let added=0,updated=0;
-      unique.forEach((r,k)=>{if(existing.has(k))updated++;else added++;existing.set(k,r)});
-      db.packaging=[...existing.values()];
-      persist();render();
-      packImportStatus('✓ '+file.name+' • aba '+sheet+' • '+added+' novos, '+updated+' atualizados • '+db.packaging.length+' materiais na base.');
-    }catch(err){console.error(err);packImportStatus('Falha: '+err.message,true)}
-    finally{input.value=''}
-  };
-  reader.readAsArrayBuffer(file);
+ const input=e.target,file=input.files?.[0];if(!file)return;
+ packImportStatus('Lendo e validando '+file.name+'...');
+ const reader=new FileReader();
+ reader.onerror=()=>{packImportStatus('Erro ao ler o arquivo.',true);input.value=''};
+ reader.onload=ev=>{
+  try{
+   const wb=XLSX.read(ev.target.result,{type:'array'});
+   const sheet=wb.SheetNames.find(n=>/Base Embalagens/i.test(n))||wb.SheetNames.find(n=>/HOBER|NICHIBRAS/i.test(n))||wb.SheetNames[0];
+   const rows=XLSX.utils.sheet_to_json(wb.Sheets[sheet],{defval:'',raw:true});
+   if(!rows.length)throw Error('A planilha está vazia. Para zerar a base, exclua os itens pelo site.');
+   const keys=Object.keys(rows[0]||{});
+   const norm=v=>String(v||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');
+   if(!keys.some(k=>['partnumber','material','numerodomaterial','codigo'].includes(norm(k))))throw Error('Coluna Part number/Material não encontrada. Use a planilha exportada pelo site.');
+   const imported=new Map();let invalid=[];
+   rows.forEach((row,i)=>{
+    if(Object.values(row).every(v=>v===''||v==null))return;
+    const r=normalizePackRow(row);
+    if(!r.material){invalid.push('linha '+(i+2)+': sem Part number');return}
+    const k=r.material.toUpperCase();
+    if(imported.has(k)){invalid.push('linha '+(i+2)+': material duplicado '+r.material);return}
+    if(!Number.isFinite(r.itemsPerPallet)||r.itemsPerPallet<=0){invalid.push('linha '+(i+2)+': LOTE inválido '+r.material);return}
+    imported.set(k,r);
+   });
+   if(invalid.length)throw Error('Importação cancelada. Corrija: '+invalid.slice(0,5).join('; ')+(invalid.length>5?' (e mais '+(invalid.length-5)+')':''));
+   if(!imported.size)throw Error('Nenhum material válido encontrado.');
+   const mode=document.getElementById('packImportMode')?.value||'replace';
+   const previous=new Map((db.packaging||[]).map(r=>[String(r.material||'').trim().toUpperCase(),r]));
+   let added=0,updated=0,removed=0;
+   imported.forEach((r,k)=>{if(previous.has(k))updated++;else added++});
+   previous.forEach((r,k)=>{if(!imported.has(k))removed++});
+   const result=mode==='replace'?new Map(imported):new Map(previous);
+   if(mode!=='replace')imported.forEach((r,k)=>result.set(k,r));
+   const summary='Arquivo: '+file.name+'\nAba: '+sheet+'\nMateriais no Excel: '+imported.size+'\nNovos: '+added+'\nExistentes atualizados: '+updated+'\n'+(mode==='replace'?'Excluídos da base: '+removed:'Materiais existentes preservados: '+(previous.size-updated))+'\nTotal final: '+result.size;
+   if(!confirm('CONFIRMAR ATUALIZAÇÃO EM MASSA\n\n'+summary+'\n\nO planejamento será mantido, mas materiais excluídos ficarão sem embalagem vinculada.\n\nDeseja aplicar?')){
+    packImportStatus('Importação cancelada. Nenhuma alteração foi feita.');return;
+   }
+   const old=db.packaging;db.packaging=[...result.values()];
+   try{persist();render()}catch(err){db.packaging=old;throw err}
+   packImportStatus('✓ Base atualizada: '+added+' novos, '+updated+' atualizados, '+(mode==='replace'?removed:0)+' excluídos. Total: '+db.packaging.length+'.');
+  }catch(err){console.error(err);packImportStatus('Importação não realizada: '+err.message,true)}
+  finally{input.value=''}
+ };
+ reader.readAsArrayBuffer(file);
 }
 function exportPackaging(){
   try{
