@@ -58,3 +58,5 @@
 #packaging .pack-actions select{flex:1 1 240px}
 #packaging .pack-actions button{flex:1 1 145px;white-space:normal}
 #packImportStatus{display:block;margin:10px 0;padding:12px!important;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;white-space:normal}
+
+.route-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:12px 0}.route-fields label{display:flex;flex-direction:column;gap:5px;font-size:13px;font-weight:600}.route-fields input,.route-fields select{padding:9px;border:1px solid #cbd5e1;border-radius:7px;width:100%}.route-editor{padding:15px;background:#f2f7fd;border:1px solid #cbdff4;border-radius:9px;margin:12px 0}.route-supplier-checks{display:flex;flex-wrap:wrap;gap:15px;margin:10px 0 16px}

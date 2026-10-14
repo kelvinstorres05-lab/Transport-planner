@@ -260,12 +260,17 @@ function saveWeeklyPlanning(){
   let t=totals(),week=currentPlanningWeek();
   if(!week){let x=prompt('Informe o número da semana (ex.: 35):');week=+x||null}
   if(!week){alert('Não foi possível identificar a semana.');return}
-  let route=db.config.routeName||'Rota não definida',period=weekDateRangeFromDaily()||db.config.weekLabel||('W'+week);
+  let selected=document.getElementById('histRouteFilter')?.value||'ALL';
+  let registered=routeRegistry().find(r=>r.code+' - '+r.name===selected);
+  if(routeRegistry().length && !registered){alert('Selecione uma rota cadastrada no filtro Rota antes de salvar a semana.');return}
+  let route=registered?registered.code+' - '+registered.name:(db.config.routeName||'Rota não definida'),period=weekDateRangeFromDaily()||db.config.weekLabel||('W'+week);
+  let snap=registered?routeSnapshot(registered,week):null;
+  if(registered&&!snap.pieces){alert('Nenhuma demanda dos fornecedores desta rota na semana W'+week+'.');return}
   let rec={
     id:Date.now(),route,week,weekLabel:'W'+week,period,dateSaved:new Date().toLocaleString('pt-BR'),
-    pieces:t.pieces,pallets:t.pallets,vehicles:t.perWeek,occ:t.avg,
-    capacity:t.perWeek*db.config.capacity,capacityNominal:db.config.capacity,
-    costPerVehicle:db.config.cost,distance:db.config.distance,ttwFactor:db.config.ttw
+    pieces:snap?.pieces??t.pieces,pallets:snap?.pallets??t.pallets,vehicles:snap?.vehicles??t.perWeek,occ:snap?.occ??t.avg,
+    capacity:snap?.capacity??(t.perWeek*db.config.capacity),capacityNominal:snap?.capacityNominal??db.config.capacity,
+    costPerVehicle:snap?.costPerVehicle??db.config.cost,distance:snap?.distance??db.config.distance,ttwFactor:db.config.ttw,routeId:registered?.id||null
   };
   let same=db.weeklyHistory.findIndex(x=>x.route===route&&+x.week===+week);
   if(same>=0){
@@ -286,7 +291,7 @@ function weeklyFiltered(){
 function renderHistoryFilters(){
   let routeSel=document.getElementById('histRouteFilter'),startSel=document.getElementById('histStartWeek'),endSel=document.getElementById('histEndWeek');
   if(!routeSel||!startSel||!endSel)return;
-  let routes=[...new Set((db.weeklyHistory||[]).map(x=>x.route))].sort(),weeks=[...new Set((db.weeklyHistory||[]).map(x=>+x.week))].sort((a,b)=>a-b);
+  let routes=[...new Set([...((db.weeklyHistory||[]).map(x=>x.route)),...routeRegistry().filter(r=>r.active).map(r=>r.code+' - '+r.name)])].sort(),weeks=[...new Set((db.weeklyHistory||[]).map(x=>+x.week))].sort((a,b)=>a-b);
   let oldR=routeSel.value||'ALL',oldS=startSel.value,oldE=endSel.value;
   routeSel.innerHTML='<option value="ALL">Todas as rotas</option>'+routes.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
   if([...routeSel.options].some(o=>o.value===oldR))routeSel.value=oldR;
@@ -857,4 +862,41 @@ function renderSupplierLinkDiagnostics(){
  const named=plan.filter(r=>{const p=idx[pnKey(r.material)];return p&&supplierName(p,r)!=='SEM FORNECEDOR'}).length;
  el.innerHTML=`<b>Diagnóstico de vínculo:</b> ${fmt(pack.length)} materiais na base de embalagens; ${fmt(plan.length)} PNs no planejamento; ${fmt(matched)} com embalagem vinculada; ${fmt(named)} com fornecedor identificado. ${matched<plan.length?'Existem PNs sem correspondência exata na base. Confira os códigos no Excel.':''}`;
 }
-function render(){renderSupplierLinkDiagnostics();renderSupplierSchedule();renderWeeklySuppliers();renderDashboard();renderPlanning();renderReceivingWindows();renderWeeklyHistory();renderPackaging();renderConfig();renderImpacts();renderLoadSelectors()}render();
+
+// Cadastro de rotas independente da configuração global (persistido no mesmo backup JSON).
+let editingRouteId=null;
+function routeRegistry(){db.routes ||= [];return db.routes}
+function supplierCatalog(){const s=new Set((db.packaging||[]).map(p=>supplierName(p,null)));(db.dailyReceipts||[]).forEach(r=>s.add(supplierName(packForMaterial(r.material),r)));return [...s].filter(x=>x&&x!=='SEM FORNECEDOR').sort((a,b)=>a.localeCompare(b,'pt-BR'))}
+function newRoute(id){
+ const r=id?routeRegistry().find(x=>x.id===id):null;editingRouteId=r?.id||null;
+ document.getElementById('routeEditor').style.display='block';
+ const fields={routeCode:r?.code||'',routeName:r?.name||'',routeOrigin:r?.origin||'',routeDestination:r?.destination||'',routeVehicleType:r?.vehicleType||'Carreta',routeCapacity:r?.capacity||db.config.capacity,routeCost:r?.cost??db.config.cost,routeDistance:r?.distance??db.config.distance};
+ Object.entries(fields).forEach(([k,v])=>document.getElementById(k).value=v);
+ const all=[...new Set([...supplierCatalog(),...(r?.suppliers||[])])];
+ document.getElementById('routeSupplierChecks').innerHTML=all.map((s,i)=>`<label><input type="checkbox" class="route-supplier" value="${esc(s)}" ${(r?.suppliers||[]).some(x=>supplierKey(x)===supplierKey(s))?'checked':''}> ${esc(s)}</label>`).join('')||'<span class="smalltxt">Importe a base de embalagens para selecionar fornecedores.</span>';
+}
+function cancelRoute(){document.getElementById('routeEditor').style.display='none';editingRouteId=null}
+function saveRoute(){
+ const val=k=>document.getElementById(k).value.trim();const code=val('routeCode'),name=val('routeName');
+ const capacity=Number(val('routeCapacity')),cost=Number(val('routeCost')),distance=Number(val('routeDistance'));
+ const suppliers=[...document.querySelectorAll('.route-supplier:checked')].map(x=>x.value);
+ if(!code||!name||!suppliers.length||!Number.isFinite(capacity)||capacity<=0||!Number.isFinite(cost)||cost<0||!Number.isFinite(distance)||distance<0){alert('Informe código, nome, ao menos um fornecedor e valores válidos.');return}
+ if(routeRegistry().some(r=>r.code.toUpperCase()===code.toUpperCase()&&r.id!==editingRouteId)){alert('Já existe uma rota com este código.');return}
+ const rec={id:editingRouteId||('route-'+Date.now()),code,name,origin:val('routeOrigin'),destination:val('routeDestination'),vehicleType:val('routeVehicleType'),capacity,cost,distance,suppliers,active:true};
+ const i=routeRegistry().findIndex(r=>r.id===rec.id);if(i>=0)db.routes[i]=rec;else db.routes.push(rec);
+ persist();cancelRoute();renderRoutes();renderWeeklyHistory();document.getElementById('routeStatus').textContent='Rota salva: '+code;
+}
+function toggleRoute(id){const r=routeRegistry().find(x=>x.id===id);if(!r)return;r.active=!r.active;persist();renderRoutes();renderWeeklyHistory()}
+function renderRoutes(){const el=document.getElementById('routeRows');if(!el)return;
+ el.innerHTML=routeRegistry().map(r=>`<tr><td><b>${esc(r.code)}</b></td><td>${esc(r.name)}<div class="smalltxt">${esc(r.origin)} → ${esc(r.destination)}</div></td><td>${(r.suppliers||[]).map(esc).join(', ')}</td><td>${esc(r.vehicleType)}</td><td>${fmt(r.capacity)}</td><td>${money(r.cost)}</td><td>${r.active?'Ativa':'Inativa'}</td><td><button class="btn small" onclick="newRoute('${r.id}')">Editar</button> <button class="btn small" onclick="toggleRoute('${r.id}')">${r.active?'Desativar':'Ativar'}</button></td></tr>`).join('')||'<tr><td colspan="8">Nenhuma rota cadastrada. Clique em + Nova rota para começar.</td></tr>';
+}
+function routeSnapshot(route,week){
+ const rows=weeklySupplierData().filter(x=>Number(x.week.split('-S')[1])===Number(week)&&route.suppliers.some(s=>supplierKey(s)===supplierKey(x.supplier)));
+ const pieces=rows.reduce((n,x)=>n+x.pieces,0),pallets=rows.reduce((n,x)=>n+x.pallets,0);
+ // Recalcular veículos por rota e por data, respeitando a capacidade do veículo da rota.
+ const daily=new Map();rows.forEach(x=>x.dates.forEach(d=>daily.set(d.date,(daily.get(d.date)||0)+d.pallets)));
+ const vehicles=[...daily.values()].reduce((n,p)=>n+Math.ceil(p/route.capacity),0);
+ return {pieces,pallets,vehicles,occ:vehicles?pallets/(vehicles*route.capacity):0,capacity:vehicles*route.capacity,capacityNominal:route.capacity,costPerVehicle:route.cost,distance:route.distance,ttwFactor:db.config.ttw,period:[...daily.keys()].sort().join(', ')};
+}
+
+function render(){renderRoutes();renderSupplierLinkDiagnostics();renderSupplierSchedule();renderWeeklySuppliers();renderDashboard();renderPlanning();renderReceivingWindows();renderWeeklyHistory();renderPackaging();renderConfig();renderImpacts();renderLoadSelectors()}render();
