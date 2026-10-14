@@ -464,7 +464,67 @@ function exportProcessedByDate(){
   XLSX.writeFile(wb,filename);
 }
 
-function importPackaging(e){readWorkbook(e.target.files[0],rows=>{let cols=Object.keys(rows[0]||{}),m=autoMap(cols);db.packaging=rows.map(r=>({supplier:r[m.supplier]||'',supplierCode:'',material:r[m.material]||'',description:r[m.description]||'',itemsPerBox:num(r[m.itemsPerBox]),boxesPerPallet:num(r[m.boxesPerPallet]),itemsPerPallet:num(r[m.itemsPerPallet])||num(r[m.itemsPerBox])*num(r[m.boxesPerPallet]),unit:'PC'})).filter(x=>x.material);persist();render()})}
+function packagingField(row, names){
+  const keys=Object.keys(row||{});
+  const norm=s=>String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');
+  for(const name of names){let key=keys.find(k=>norm(k)===norm(name));if(key!==undefined)return row[key]}
+  return '';
+}
+function packImportStatus(message,error=false){
+  let el=document.getElementById('packImportStatus');
+  if(el){el.textContent=message;el.style.color=error?'#b91c1c':'#166534'}
+}
+function normalizePackRow(row){
+  let material=String(packagingField(row,['Part number','Material','Part Number','Número do material','Codigo','Código'])||'').trim();
+  let supplier=String(packagingField(row,['Fornecedor','Supplier','Name of vendor'])||'').trim();
+  let supplierCode=String(packagingField(row,['Vendor','Código fornecedor','Supplier Code'])||'').trim();
+  let description=String(packagingField(row,['Descrição','Descricao','Description','Texto breve de material'])||'').trim();
+  let itemsPerBox=num(packagingField(row,['PARTS/ PU','PARTS/PU','Itens/caixa','Itens por caixa','Peças/Caixa','Items per box']));
+  let boxesPerPallet=num(packagingField(row,['PU/HU','Caixas/Pallet','Caixas por pallet','Boxes per pallet']));
+  let itemsPerPallet=num(packagingField(row,['LOTE','Itens/Pallet','Itens por pallet','Items per pallet']));
+  if(!itemsPerPallet)itemsPerPallet=itemsPerBox*boxesPerPallet;
+  return {material,supplier,supplierCode,description,itemsPerBox,boxesPerPallet,itemsPerPallet,unit:'PC'};
+}
+function importPackaging(e){
+  let input=e.target,file=input.files?.[0];
+  if(!file)return;
+  packImportStatus('Lendo '+file.name+'...');
+  let reader=new FileReader();
+  reader.onerror=()=>{packImportStatus('Erro ao ler o arquivo.',true);input.value=''};
+  reader.onload=ev=>{
+    try{
+      let wb=XLSX.read(ev.target.result,{type:'array'});
+      let sheet=wb.SheetNames.find(n=>/HOBER|NICHIBRAS/i.test(n))||wb.SheetNames[0];
+      let rows=XLSX.utils.sheet_to_json(wb.Sheets[sheet],{defval:'',raw:true});
+      let parsed=rows.map(normalizePackRow).filter(r=>r.material);
+      if(!parsed.length)throw Error('Nenhum Part Number encontrado. Verifique os cabeçalhos.');
+      let unique=new Map();parsed.forEach(r=>unique.set(r.material.toUpperCase(),r));
+      let mode=document.getElementById('packImportMode')?.value||'merge';
+      let existing=new Map((mode==='replace'?[]:db.packaging).map(r=>[String(r.material||'').trim().toUpperCase(),r]));
+      let added=0,updated=0;
+      unique.forEach((r,k)=>{if(existing.has(k))updated++;else added++;existing.set(k,r)});
+      db.packaging=[...existing.values()];
+      persist();render();
+      packImportStatus('✓ '+file.name+' • aba '+sheet+' • '+added+' novos, '+updated+' atualizados • '+db.packaging.length+' materiais na base.');
+    }catch(err){console.error(err);packImportStatus('Falha: '+err.message,true)}
+    finally{input.value=''}
+  };
+  reader.readAsArrayBuffer(file);
+}
+function exportPackaging(){
+  try{
+    let rows=(db.packaging||[]).map(p=>({
+      'Vendor':p.supplierCode||'','Fornecedor':p.supplier||'','Part number':p.material||'',
+      'Descrição':p.description||'','PARTS/ PU':+p.itemsPerBox||0,
+      'PU/HU':+p.boxesPerPallet||0,'LOTE':+p.itemsPerPallet||0
+    }));
+    let wb=XLSX.utils.book_new(),sheet=XLSX.utils.json_to_sheet(rows);
+    sheet['!cols']=[{wch:15},{wch:38},{wch:22},{wch:65},{wch:17},{wch:13},{wch:15}];
+    XLSX.utils.book_append_sheet(wb,sheet,'Base Embalagens');
+    XLSX.writeFile(wb,'WK_Base_Embalagens_Atual.xlsx');
+    packImportStatus('✓ Exportação iniciada: '+rows.length+' materiais.');
+  }catch(err){console.error(err);packImportStatus('Erro na exportação: '+err.message,true)}
+}
 function readPlanningFile(e){
   let input=e.target,f=input.files&&input.files[0];
   if(!f)return;
