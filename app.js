@@ -753,6 +753,59 @@ function scheduleFor(name){
  db.supplierSchedules ||= {};
  return db.supplierSchedules[supplierKey(name)]||{days:[1,2,3,4,5],windows:1,vehicles:1};
 }
+// Exceções semanais: o calendário padrão permanece intacto.
+function weekStartFromLabel(label){
+ const m=String(label||'').match(/^(\d{4})-S(\d{1,2})$/);if(!m)return null;
+ const y=Number(m[1]),w=Number(m[2]);if(w<1||w>53)return null;
+ const jan4=new Date(Date.UTC(y,0,4)),dow=jan4.getUTCDay()||7;
+ const mon=new Date(jan4);mon.setUTCDate(jan4.getUTCDate()-dow+1+(w-1)*7);
+ return mon.toISOString().slice(0,10);
+}
+function datePlusDays(date,n){const d=new Date(date+'T12:00:00');d.setDate(d.getDate()+n);return d.toISOString().slice(0,10)}
+function weekLabelForDate(date){return isoWeekYear(date)?.label||''}
+function effectiveScheduleFor(name,date){
+ const base=scheduleFor(name),week=weekLabelForDate(date);
+ const override=db.weeklySupplierSchedules?.[week]?.[supplierKey(name)];
+ if(!override)return {...base,weeklyOverride:false};
+ const day=new Date(date+'T12:00:00').getDay();
+ const count=Number(override.windowsByDay?.[day]??0);
+ return {...base,days:Object.entries(override.windowsByDay||{}).filter(([k,v])=>Number(v)>0).map(([k])=>Number(k)),windows:Math.max(0,count),weeklyOverride:true};
+}
+function weeklyScheduleWeeks(){
+ const weeks=new Set((db.dailyReceipts||[]).map(r=>weekLabelForDate(currentReceiptDate(r))).filter(Boolean));
+ Object.keys(db.weeklySupplierSchedules||{}).forEach(w=>weeks.add(w));
+ const today=new Date().toISOString().slice(0,10),w=weekLabelForDate(today);if(w)weeks.add(w);
+ return [...weeks].sort();
+}
+function renderWeeklyScheduleEditor(){
+ const sel=document.getElementById('weeklyScheduleWeek'),table=document.getElementById('weeklyScheduleRows');if(!sel||!table)return;
+ const old=sel.value,weeks=weeklyScheduleWeeks();
+ sel.innerHTML=weeks.map(w=>`<option value="${esc(w)}">${esc(w)}</option>`).join('');
+ if(weeks.includes(old))sel.value=old;else if(weeks.length)sel.value=weeks[weeks.length-1];
+ const start=weekStartFromLabel(sel.value);if(!start)return;
+ document.getElementById('weeklyScheduleRange').textContent=`${ptDate(start)} a ${ptDate(datePlusDays(start,6))} • Edite as janelas de cada dia e salve a semana.`;
+ const names=window.__supplierNames||[];window.__weeklySupplierNames=names;
+ const override=db.weeklySupplierSchedules?.[sel.value]||{};
+ table.innerHTML=names.map((name,i)=>{
+  const base=scheduleFor(name),saved=override[supplierKey(name)],values={};
+  for(let d=0;d<7;d++)values[d]=saved?Number(saved.windowsByDay?.[d]||0):((base.days||[]).includes(d)?Math.max(0,Number(base.windows)||0):0);
+  const total=Object.values(values).reduce((a,b)=>a+b,0);
+  return `<tr><td><b>${esc(name)}</b>${saved?'<div class="smalltxt">Exceção semanal salva</div>':'<div class="smalltxt">Herdado do padrão</div>'}</td>${Array.from({length:7},(_,iDay)=>{const date=datePlusDays(start,iDay),day=(iDay+1)%7;return `<td><label class="smalltxt">${ptDate(date)}</label><input class="weeklyday" data-i="${i}" data-day="${day}" type="number" min="0" max="30" step="1" value="${values[day]}" style="width:65px" oninput="updateWeeklyWindowTotal(${i})"></td>`}).join('')}<td><b id="weeklyTotal${i}">${total}</b></td><td><button class="btn" onclick="saveWeeklySupplierSchedule(${i})">Salvar</button> <button class="btn" onclick="resetWeeklySupplierSchedule(${i})" title="Voltar ao calendário padrão">Padrão</button></td></tr>`;
+ }).join('');
+}
+function updateWeeklyWindowTotal(i){const inputs=[...document.querySelectorAll(`.weeklyday[data-i="${i}"]`)];const sum=inputs.reduce((a,x)=>a+(Number(x.value)||0),0);const el=document.getElementById('weeklyTotal'+i);if(el)el.textContent=sum}
+function saveWeeklySupplierSchedule(i,refresh=true){
+ const name=window.__weeklySupplierNames?.[i],week=document.getElementById('weeklyScheduleWeek')?.value;if(!name||!week)return false;
+ const inputs=[...document.querySelectorAll(`.weeklyday[data-i="${i}"]`)];const windowsByDay={};
+ for(const el of inputs){const v=Number(el.value);if(!Number.isInteger(v)||v<0||v>30){alert('Informe de 0 a 30 janelas por dia para '+name);return false}windowsByDay[el.dataset.day]=v}
+ db.weeklySupplierSchedules ||= {};db.weeklySupplierSchedules[week] ||= {};
+ db.weeklySupplierSchedules[week][supplierKey(name)]={windowsByDay};persist();
+ if(refresh){refreshWeeklyScheduleViews();document.getElementById('weeklyScheduleStatus').textContent=`Semana ${week} salva para ${name}.`}
+ return true;
+}
+function saveAllWeeklySupplierSchedules(){for(let i=0;i<(window.__weeklySupplierNames||[]).length;i++)if(!saveWeeklySupplierSchedule(i,false))return;refreshWeeklyScheduleViews();document.getElementById('weeklyScheduleStatus').textContent='Todas as programações semanais foram salvas.'}
+function resetWeeklySupplierSchedule(i){const name=window.__weeklySupplierNames?.[i],week=document.getElementById('weeklyScheduleWeek')?.value;if(!name||!week)return;delete db.weeklySupplierSchedules?.[week]?.[supplierKey(name)];persist();refreshWeeklyScheduleViews();document.getElementById('weeklyScheduleStatus').textContent=`${name}: semana ${week} voltou ao calendário padrão.`}
+function refreshWeeklyScheduleViews(){renderWeeklyScheduleEditor();renderSupplierSchedule();renderOperationalViews();renderWeeklySuppliers();}
 function supplierDemandForDate(date){
  const mode='firmed';
  const packs=packIndex(),groups=new Map();
@@ -770,7 +823,7 @@ function supplierDemandForDate(date){
    groups.set(key,g);
  });
  return [...groups.values()].map(g=>{
-   const sc=scheduleFor(g.supplier),weekday=new Date(date+'T12:00:00').getDay();
+   const sc=effectiveScheduleFor(g.supplier,date),weekday=new Date(date+'T12:00:00').getDay();
    const allowed=(sc.days||[]).includes(weekday);
    const cap=Math.max(1,Number(sc.capacity)||Number(db.config.capacity)||52);
    const vehicles=Math.ceil(g.pallets/cap),perWindow=Math.max(1,Number(sc.vehicles)||1);
@@ -790,6 +843,7 @@ function renderSupplierSchedule(){
   return `<tr><td><b>${esc(name)}</b></td><td>${SUPPLIER_DAYS.map((d,j)=>`<label style="display:inline-flex;gap:2px;margin-right:7px"><input type="checkbox" class="supday" data-i="${i}" value="${j}" ${(sc.days||[]).includes(j)?'checked':''}>${d}</label>`).join('')}</td><td><input class="supwindows" data-i="${i}" type="number" min="0" max="30" value="${sc.windows}" style="width:75px"></td><td><input class="supvehicles" data-i="${i}" type="number" min="1" max="30" value="${sc.vehicles}" style="width:75px"></td><td><input class="supcapacity" data-i="${i}" type="number" min="1" max="200" value="${sc.capacity||db.config.capacity}" style="width:85px"></td><td><input class="supcost" data-i="${i}" type="number" min="0" step="0.01" value="${sc.cost??db.config.cost}" style="width:100px"></td><td><button class="btn" onclick="saveSupplierSchedule(${i})">Salvar</button></td></tr>`;
  }).join('');
  window.__supplierNames=all;
+ renderWeeklyScheduleEditor();
  const dateInput=document.getElementById('supplierDemandDate');
  if(!dateInput.value){
    const first=(db.dailyReceipts||[]).map(r=>currentReceiptDate(r)).filter(Boolean).sort()[0];
@@ -847,7 +901,7 @@ function weeklySupplierData(){
  dates.forEach(date=>{
   const w=isoWeekYear(date);if(!w)return;
   supplierDemandForDate(date).forEach(g=>{
-   const key=w.label+'|'+supplierKey(g.supplier),sc=scheduleFor(g.supplier);
+   const key=w.label+'|'+supplierKey(g.supplier),sc=effectiveScheduleFor(g.supplier,date);
    const x=map.get(key)||{week:w.label,supplier:g.supplier,materials:new Set(),pieces:0,pallets:0,missing:0,dates:[],vehicles:0,windows:0,available:0,cost:0};
    g.materials.forEach(p=>x.materials.add(p));x.pieces+=g.pieces;x.pallets+=g.pallets;x.missing+=g.missing;
    // Vehicles cannot be shared across separate delivery dates.
@@ -935,7 +989,7 @@ function operationalRows(){
    g.pieces+=qty;const ipp=Number(pk?.itemsPerPallet)||0;if(ipp>0)g.pallets+=Math.ceil(qty/ipp);else g.missing++;group.set(key,g);
   }
  }
- return [...group.values()].map(g=>{const sc=scheduleFor(g.supplier),day=new Date(g.date+'T12:00:00').getDay(),allowed=(sc.days||[]).includes(day),perWindow=Math.max(1,Number(sc.vehicles)||1),available=allowed?Math.max(0,Number(sc.windows)||0):0,vehicles=Math.ceil(g.pallets/g.capacity),windows=Math.ceil(vehicles/perWindow),loads=[];
+ return [...group.values()].map(g=>{const sc=effectiveScheduleFor(g.supplier,g.date),day=new Date(g.date+'T12:00:00').getDay(),allowed=(sc.days||[]).includes(day),perWindow=Math.max(1,Number(sc.vehicles)||1),available=allowed?Math.max(0,Number(sc.windows)||0):0,vehicles=Math.ceil(g.pallets/g.capacity),windows=Math.ceil(vehicles/perWindow),loads=[];
   if(vehicles){const base=Math.floor(g.pallets/vehicles),extra=g.pallets%vehicles;for(let i=0;i<vehicles;i++)loads.push(base+(i<extra?1:0))}
   return {...g,week:isoWeekYear(g.date)?.label||'',allowed,available,vehicles,windows,loads,status:g.missing?'Embalagem pendente':!allowed?'Dia não habilitado':windows>available?'Janelas insuficientes':'Capacidade disponível'};
  }).sort((a,b)=>a.date.localeCompare(b.date)||a.routeCode.localeCompare(b.routeCode)||a.supplier.localeCompare(b.supplier));
